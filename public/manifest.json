@@ -1,0 +1,17 @@
+{
+  "name": "Priority Tasks",
+  "short_name": "Priority Tasks",
+  "description": "MedStar Facilities Priority Tasks",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1815",
+  "theme_color": "#c39248",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
