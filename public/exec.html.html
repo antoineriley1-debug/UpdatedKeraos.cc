@@ -1,0 +1,3662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EXEC-OS // Twiney</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0908; --bg-raised: #13110f; --bg-sunken: #070605; --surface: #181513;
+    --border: #2a2520; --border-bright: #3a342c;
+    --text: #f4ede0; --text-dim: #9a9088; --text-faint: #5c554d;
+    --brass: #c9a256; --cyan: #6dbed6; --red: #d96b5c; --green: #7fa86b; --amber: #e3b04b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  #root { height: 100vh; }
+  @keyframes execspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes execos-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes execos-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.7; } }
+  .spin { animation: execspin 0.9s linear infinite; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-sunken); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
+  button:focus, input:focus, textarea:focus { outline: none; }
+  textarea, input { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#c9a256;font-family:monospace;font-size:11px;letter-spacing:2px;">BOOTING EXEC-OS...</div></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// =============================================================
+// DESIGN SYSTEM — Enterprise operations console
+// References: Bloomberg Terminal density, Linear precision,
+// Palantir Foundry restraint, Datadog instrumentation.
+// =============================================================
+
+// Spacing scale — 4px base grid. Use these tokens instead of arbitrary numbers.
+const S = { xxs:2, xs:4, sm:6, md:8, lg:12, xl:16, xxl:24, xxxl:32, huge:48 };
+
+// Type scale — limited, intentional, ratio-aware.
+const TS = {
+  micro: { fontSize:10,   fontWeight:500, letterSpacing:0.4,   lineHeight:1.2  },
+  label: { fontSize:11,   fontWeight:500, letterSpacing:0.6,   lineHeight:1.3  },
+  data:  { fontSize:12,   fontWeight:500, letterSpacing:0,     lineHeight:1.4  },
+  body:  { fontSize:13,   fontWeight:400, letterSpacing:0,     lineHeight:1.5  },
+  h3:    { fontSize:14,   fontWeight:600, letterSpacing:-0.1,  lineHeight:1.3  },
+  h2:    { fontSize:18,   fontWeight:600, letterSpacing:-0.2,  lineHeight:1.25 },
+  h1:    { fontSize:22,   fontWeight:600, letterSpacing:-0.3,  lineHeight:1.2  },
+  hero:  { fontSize:30,   fontWeight:600, letterSpacing:-0.6,  lineHeight:1    },
+};
+
+const T_DEFAULT = {
+  // Surfaces — 5 elevation layers, near-black base
+  bg:          "#0c0e12",
+  bgSunken:    "#08090c",
+  bgRaised:    "#11141a",
+  surface:     "#161a22",
+  surfaceHi:   "#1c2030",
+
+  // Borders — 3 strengths for visual hierarchy
+  border:      "#1f2330",
+  borderBright:"#2a3142",
+  borderFaint: "#161922",
+
+  // Text — 3 tiers
+  text:        "#e6eaf3",
+  textDim:     "#8a93a6",
+  textFaint:   "#525a6e",
+
+  // Single action accent — buttons, focus, links. NOT decorative.
+  accent:      "#5e8df0",
+  accentDim:   "#3d5fa8",
+  accentBg:    "#1a2540",
+
+  // Status semantics — reserved for status, never decoration
+  red:         "#e5484d",
+  amber:       "#e8a13a",
+  green:       "#34c759",
+  cyan:        "#3eb4d4",
+
+  // Legacy aliases — keeps existing components working until they're fully refactored
+  brass:       "#5e8df0",
+  bgRaised_alias: "#11141a",
+};
+
+const THEME_PRESETS = {
+  "Operations Dark (default)": { ...T_DEFAULT },
+  "Bloomberg Amber": {
+    bg:"#0a0a0a", bgSunken:"#050505", bgRaised:"#0f0f0f", surface:"#1a1a1a", surfaceHi:"#222222",
+    border:"#1f1f1f", borderBright:"#2e2e2e", borderFaint:"#141414",
+    text:"#e8e6df", textDim:"#8a877e", textFaint:"#4e4c47",
+    accent:"#e6a23c", accentDim:"#a87520", accentBg:"#2a1f0d",
+    red:"#e5484d", amber:"#e8a13a", green:"#5cae64", cyan:"#4ba8c4",
+    brass:"#e6a23c",
+  },
+  "Linear Slate": {
+    bg:"#0d0e10", bgSunken:"#08090a", bgRaised:"#15171a", surface:"#1c1f23", surfaceHi:"#23262c",
+    border:"#1f2226", borderBright:"#2c3038", borderFaint:"#13151a",
+    text:"#e8eaed", textDim:"#8a8f99", textFaint:"#525762",
+    accent:"#7c6df0", accentDim:"#5a4fbf", accentBg:"#1f1c3a",
+    red:"#e5484d", amber:"#e8a13a", green:"#34c759", cyan:"#3eb4d4",
+    brass:"#7c6df0",
+  },
+  "Palantir Steel": {
+    bg:"#0e1014", bgSunken:"#0a0c10", bgRaised:"#141821", surface:"#1a1f2a", surfaceHi:"#202635",
+    border:"#1e2330", borderBright:"#2d3445", borderFaint:"#13161e",
+    text:"#e6e9f0", textDim:"#8993a8", textFaint:"#525a6e",
+    accent:"#4a90e2", accentDim:"#356ba8", accentBg:"#15243e",
+    red:"#e5484d", amber:"#e8a13a", green:"#34c759", cyan:"#3eb4d4",
+    brass:"#4a90e2",
+  },
+  "MedStar Blue": {
+    bg:"#0a1419", bgSunken:"#050d12", bgRaised:"#0f1d26", surface:"#16242e", surfaceHi:"#1d2f3c",
+    border:"#1f3340", borderBright:"#2d4a5c", borderFaint:"#13212a",
+    text:"#e8f0f5", textDim:"#8aa0b0", textFaint:"#4f6373",
+    accent:"#5dade2", accentDim:"#3d7ba8", accentBg:"#142e42",
+    red:"#e5484d", amber:"#e8a13a", green:"#34c759", cyan:"#48c9b0",
+    brass:"#5dade2",
+  },
+  "Paper (light mode)": {
+    bg:"#f7f8fa", bgSunken:"#eef0f4", bgRaised:"#ffffff", surface:"#f4f6fa", surfaceHi:"#e8ecf2",
+    border:"#dde1ea", borderBright:"#b8c0cf", borderFaint:"#eaedf2",
+    text:"#171a23", textDim:"#5a6478", textFaint:"#9099aa",
+    accent:"#2563eb", accentDim:"#1d4ed8", accentBg:"#dde7fa",
+    red:"#dc2626", amber:"#c97a1f", green:"#16a34a", cyan:"#0891b2",
+    brass:"#2563eb",
+  },
+};
+
+const T = { ...T_DEFAULT };
+function applyTheme(overrides) {
+  for (const k of Object.keys(T)) delete T[k];
+  Object.assign(T, T_DEFAULT, overrides || {});
+  window.dispatchEvent(new Event("execos:theme-changed"));
+}
+(function bootTheme() {
+  const saved = (function(){
+    try { const v = localStorage.getItem("execos:theme_overrides"); return v ? JSON.parse(v) : null; } catch { return null; }
+  })();
+  if (saved) Object.assign(T, T_DEFAULT, saved);
+})();
+
+const FF = {
+  display: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  body:    "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  mono:    "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace",
+};
+
+const SYSTEM_PROMPT = `You are EXEC-OS — Twiney's personal AI Chief of Staff.
+
+Twiney is Antoine W. Riley Sr., Director of Systems Maintenance at Crothall Healthcare, managing the full MedStar Health portfolio (10 hospitals: MWHC, MGUH, MMMC, MUMH, MHH, MGSH, MSMHC, MSMH, MNRH, MFSHC). He reports to Heather C. West. Active work includes Building X BAS controls (Limbach), summer cooling readiness, PM compliance libraries, the MWHC turnover checklist, and proprietary tools MedStarH2OLog and Load Lever.
+
+VOICE: Direct. Technically precise. Executive-appropriate. Plain prose over bullet-heavy formats unless the deliverable demands a list. No hyphens as structural punctuation. Concise — every sentence earns its place.
+
+OUTPUT: Operational. Twiney should be able to use what you produce without editing. If you don't have enough context, say what's missing in one line and proceed with the best assumption clearly stated.
+
+NEVER fabricate vendor names, dates, ticket numbers, hospital codes, or specifics you don't have. If asked about something you don't know, say so plainly.`;
+
+// ---------- ICONS ----------
+const Icon = ({ name, size=14, color="currentColor" }) => {
+  const P = {
+    dash:<g><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></g>,
+    term:<g><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></g>,
+    brain:<path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-1.04M12 4.5a2.5 2.5 0 0 1 4.96-.44 2.5 2.5 0 0 1 2.96 3.08 3 3 0 0 1 .34 5.58 2.5 2.5 0 0 1-1.32 4.24 2.5 2.5 0 0 1-4.44 1.04"/>,
+    mail:<g><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></g>,
+    file:<g><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></g>,
+    cog:<g><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></g>,
+    search:<g><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></g>,
+    send:<g><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></g>,
+    spark:<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/>,
+    trash:<g><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></g>,
+    copy:<g><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></g>,
+    load:<g><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></g>,
+    chev:<polyline points="9 18 15 12 9 6"/>,
+    arrow:<g><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></g>,
+    alert:<g><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></g>,
+    check:<g><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></g>,
+    timer:<g><circle cx="12" cy="13" r="8"/><line x1="12" y1="9" x2="12" y2="13"/><polyline points="9 1 15 1"/></g>,
+    target:<g><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></g>,
+    flame:<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>,
+    list:<g><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></g>,
+    tri:<polygon points="12 2 22 20 2 20 12 2"/>,
+    hex:<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>,
+    zap:<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>,
+    key:<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>,
+    pause:<g><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></g>,
+  };
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}>{P[name] || null}</svg>;
+};
+
+// ---------- STORAGE (localStorage + optional cloud sync) ----------
+const LS = {
+  get: (k, fb) => { try { const v = localStorage.getItem("execos:" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } },
+  set: (k, v) => {
+    try { localStorage.setItem("execos:" + k, JSON.stringify(v)); } catch (e) { console.warn(e); }
+    if (Cloud.enabled && !Cloud.LOCAL_ONLY_KEYS.includes(k)) Cloud.queue(k, v);
+  },
+};
+
+// ---------- CLOUD SYNC (Supabase REST + PostgREST) ----------
+const Cloud = {
+  url: "", anonKey: "", workspaceKey: "", enabled: false,
+  // These keys NEVER leave the device — security
+  LOCAL_ONLY_KEYS: ["api_key", "supabase_config", "model", "voice_mode"],
+  // Pending writes (debounced)
+  _pending: new Map(),
+  _timers: new Map(),
+  _statusListeners: [],
+  _status: { state: "off", lastSync: 0, error: "" },
+
+  configure(cfg) {
+    this.url = (cfg.url || "").replace(/\/$/, "");
+    this.anonKey = cfg.anonKey || "";
+    this.workspaceKey = cfg.workspaceKey || "";
+    this.enabled = !!(this.url && this.anonKey && this.workspaceKey);
+    LS.set("supabase_config", { url: this.url, anonKey: this.anonKey, workspaceKey: this.workspaceKey });
+    this._emit({ state: this.enabled ? "idle" : "off" });
+  },
+  disable() {
+    this.enabled = false;
+    localStorage.removeItem("execos:supabase_config");
+    this._emit({ state: "off" });
+  },
+  onStatus(cb) { this._statusListeners.push(cb); return () => { this._statusListeners = this._statusListeners.filter(c => c !== cb); }; },
+  _emit(patch) { this._status = { ...this._status, ...patch }; this._statusListeners.forEach(cb => cb(this._status)); },
+  _headers() {
+    return {
+      "apikey": this.anonKey,
+      "Authorization": "Bearer " + this.anonKey,
+      "Content-Type": "application/json",
+    };
+  },
+
+  queue(key, value) {
+    this._pending.set(key, value);
+    if (this._timers.has(key)) clearTimeout(this._timers.get(key));
+    this._timers.set(key, setTimeout(() => this._flush(key), 1200));
+  },
+
+  async _flush(key) {
+    if (!this.enabled) return;
+    const value = this._pending.get(key);
+    this._pending.delete(key);
+    this._timers.delete(key);
+    this._emit({ state: "syncing", error: "" });
+    try {
+      const body = [{
+        workspace_key: this.workspaceKey,
+        data_key: key,
+        value: value,
+        updated_at: new Date().toISOString(),
+      }];
+      const res = await fetch(this.url + "/rest/v1/user_data?on_conflict=workspace_key,data_key", {
+        method: "POST",
+        headers: { ...this._headers(), "Prefer": "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error("Sync " + res.status + ": " + txt.slice(0, 200));
+      }
+      this._emit({ state: "ok", lastSync: Date.now(), error: "" });
+    } catch (e) {
+      this._emit({ state: "error", error: e.message });
+    }
+  },
+
+  async pullAll() {
+    if (!this.enabled) return { merged: 0 };
+    this._emit({ state: "syncing", error: "" });
+    try {
+      const res = await fetch(
+        this.url + "/rest/v1/user_data?workspace_key=eq." + encodeURIComponent(this.workspaceKey) + "&select=data_key,value,updated_at",
+        { headers: this._headers() }
+      );
+      if (!res.ok) throw new Error("Pull " + res.status);
+      const rows = await res.json();
+      let merged = 0;
+      for (const row of rows) {
+        if (Cloud.LOCAL_ONLY_KEYS.includes(row.data_key)) continue;
+        // Cloud always wins on pull
+        localStorage.setItem("execos:" + row.data_key, JSON.stringify(row.value));
+        merged++;
+      }
+      this._emit({ state: "ok", lastSync: Date.now(), error: "" });
+      return { merged };
+    } catch (e) {
+      this._emit({ state: "error", error: e.message });
+      throw e;
+    }
+  },
+
+  async testConnection() {
+    if (!this.url || !this.anonKey) throw new Error("URL or anon key missing");
+    const res = await fetch(this.url + "/rest/v1/user_data?select=workspace_key&limit=1", { headers: this._headers() });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error("HTTP " + res.status + ": " + txt.slice(0, 200));
+    }
+    return true;
+  },
+};
+
+// Auto-load saved cloud config on boot
+(function bootCloud() {
+  const cfg = LS.get("supabase_config", null);
+  if (cfg && cfg.url && cfg.anonKey && cfg.workspaceKey) {
+    Cloud.url = cfg.url; Cloud.anonKey = cfg.anonKey; Cloud.workspaceKey = cfg.workspaceKey;
+    Cloud.enabled = true;
+    // Pull cloud data on boot (overwrites local)
+    Cloud.pullAll().catch(e => console.warn("Boot pull failed:", e.message));
+  }
+})();
+
+// ---------- CSV PARSER ----------
+function parseCsv(text) {
+  const out = [];
+  let row = [], cell = "", inQ = false, i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { cell += '"'; i += 2; continue; }
+      if (c === '"') { inQ = false; i++; continue; }
+      cell += c; i++;
+    } else {
+      if (c === '"') { inQ = true; i++; continue; }
+      if (c === ',') { row.push(cell); cell = ""; i++; continue; }
+      if (c === '\r') { i++; continue; }
+      if (c === '\n') { row.push(cell); out.push(row); row = []; cell = ""; i++; continue; }
+      cell += c; i++;
+    }
+  }
+  if (cell.length || row.length) { row.push(cell); out.push(row); }
+  if (out.length === 0) return { headers: [], rows: [] };
+  const headers = out[0];
+  const rows = out.slice(1).map(r => {
+    const o = {};
+    headers.forEach((h, idx) => { o[h] = r[idx] || ""; });
+    return o;
+  });
+  return { headers, rows };
+}
+
+// ---------- API CALL ----------
+async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey, model, source = "terminal", includeCredentials = false }) {
+  if (!apiKey) throw new Error("No API key set. Open Settings (gear icon) and paste your Anthropic API key.");
+
+  // Inject long-term memory
+  const memories = LS.get("memories", []);
+  let augmentedSystem = system;
+  if (memories.length) {
+    augmentedSystem += "\n\n# LONG-TERM MEMORY\nThings Twiney has explicitly asked you to remember. Use these naturally when relevant.\n" +
+      memories.map((m, i) => `${i + 1}. ${m.text}`).join("\n");
+  }
+
+  // Inject any notes the user explicitly pinned as "active context"
+  const notes = LS.get("notes", []);
+  const pinnedNotes = notes.filter(n => n.pinned);
+  if (pinnedNotes.length) {
+    augmentedSystem += "\n\n# PINNED REFERENCE DOCUMENTS\nThe user has pinned these as active context.\n" +
+      pinnedNotes.map(n => `## ${n.title}\n${n.body.slice(0, 6000)}`).join("\n\n");
+  }
+
+  // Inject site profiles: any site code mentioned in the prompt OR history triggers full profile.
+  // If no specific code is mentioned, inject all site summaries (without credentials) for cross-site queries.
+  const sites = LS.get("sites", []);
+  if (sites.length) {
+    const haystack = (prompt + " " + history.map(m => m.content).join(" ")).toUpperCase();
+    const SITE_CODES = ["MWHC", "MGUH", "MMMC", "MUMH", "MHH", "MGSH", "MSMHC", "MSMH", "MNRH", "MFSHC"];
+    const mentioned = SITE_CODES.filter(c => new RegExp("\\b" + c + "\\b").test(haystack));
+    if (mentioned.length) {
+      const fullProfiles = sites.filter(s => mentioned.includes(s.code));
+      if (fullProfiles.length) {
+        augmentedSystem += "\n\n# SITE PROFILES (referenced in this query)\n" +
+          fullProfiles.map(s => formatSiteForContext(s, includeCredentials)).join("\n\n---\n\n");
+      }
+    } else {
+      // Light cross-site summary when no specific site is named
+      augmentedSystem += "\n\n# PORTFOLIO SITES (summary only — ask about a specific site code for full detail)\n" +
+        sites.map(s => `${s.code}: ${s.name || "[name TBD]"} — Director: ${s.director || "TBD"}`).join("\n");
+    }
+  }
+
+  // Inject live Smartsheet tasks (Priority Tasks tracker) when relevant.
+  // We always inject open tasks since they're directly operational and small.
+  const liveTasks = (typeof window !== "undefined" && window.EXEC_OS_LIVE_TASKS) || [];
+  if (liveTasks.length) {
+    const isDone = (s) => /complete|done|closed/i.test(s || "");
+    const openTasks = liveTasks.filter(t => !isDone(t.status)).slice(0, 50);
+    if (openTasks.length) {
+      augmentedSystem += "\n\n# LIVE PRIORITY TASKS (from Smartsheet, updated automatically)\n";
+      augmentedSystem += openTasks.map((t, i) => {
+        const parts = [`${i + 1}. ${t.task || "(untitled)"}`];
+        const meta = [];
+        if (t.status) meta.push("status: " + t.status);
+        if (t.owner) meta.push("owner: " + t.owner);
+        if (t.dueDate) meta.push("due: " + t.dueDate);
+        if (t.priority) meta.push("priority: " + t.priority);
+        if (t.site) meta.push("site: " + t.site);
+        if (meta.length) parts.push("   [" + meta.join(" · ") + "]");
+        if (t.notes) parts.push("   notes: " + t.notes.slice(0, 200));
+        return parts.join("\n");
+      }).join("\n");
+    }
+  }
+
+  const messages = [...history, { role: "user", content: prompt }];
+  const startedAt = Date.now();
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({ model: model || "claude-sonnet-4-6", max_tokens: 2048, system: augmentedSystem, messages }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error("API " + res.status + ": " + txt.slice(0, 200));
+    }
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+    appendAudit({ source, prompt: prompt.slice(0, 300), promptLen: prompt.length, replyLen: text.length, ms: Date.now() - startedAt, model: model || "claude-sonnet-4-6", status: "ok" });
+    return text || "(no response)";
+  } catch (e) {
+    appendAudit({ source, prompt: prompt.slice(0, 300), promptLen: prompt.length, ms: Date.now() - startedAt, model: model || "claude-sonnet-4-6", status: "error", error: e.message });
+    throw e;
+  }
+}
+
+function appendAudit(entry) {
+  const log = LS.get("audit_log", []);
+  log.unshift({ ts: Date.now(), ...entry });
+  LS.set("audit_log", log.slice(0, 200));
+}
+
+// ---------- PRIMITIVES ----------
+// ---------- PRIMITIVES (enterprise design system) ----------
+
+// Status pill — used ONLY for status indicators, never decoration.
+const Pill = ({ children, color = T.accent, variant = "soft" }) => {
+  const styles = variant === "soft"
+    ? { color, border: "1px solid " + color + "33", background: color + "12" }
+    : variant === "outline"
+    ? { color: T.textDim, border: "1px solid " + T.border, background: "transparent" }
+    : { color: T.bg, background: color, border: "1px solid " + color };
+  return (
+    <span style={{
+      ...styles,
+      fontFamily: FF.mono,
+      fontSize: 10,
+      fontWeight: 500,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+      padding: "2px 6px",
+      borderRadius: 3,
+      display: "inline-flex",
+      alignItems: "center",
+      whiteSpace: "nowrap",
+      lineHeight: 1.4,
+    }}>{children}</span>
+  );
+};
+
+// Panel — single container shape used app-wide.
+const Panel = ({ title, action, subtitle, children, dense, noPad, accent }) => (
+  <div style={{
+    background: T.bgRaised,
+    border: "1px solid " + T.border,
+    borderRadius: 4,
+    overflow: "hidden",
+  }}>
+    {(title || subtitle || action) && (
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: dense ? `${S.md}px ${S.lg}px` : `${S.lg}px ${S.xl}px`,
+        borderBottom: "1px solid " + T.borderFaint,
+        gap: S.lg,
+        minHeight: 40,
+      }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: S.lg, minWidth: 0, flex: 1 }}>
+          {title && (
+            <div style={{
+              ...TS.label,
+              color: T.text,
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}>{title}</div>
+          )}
+          {subtitle && (
+            <div style={{ ...TS.micro, color: T.textFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{subtitle}</div>
+          )}
+        </div>
+        {action && <div style={{ display: "flex", gap: S.md, alignItems: "center", flexShrink: 0 }}>{action}</div>}
+      </div>
+    )}
+    <div style={{ padding: noPad ? 0 : (dense ? `${S.lg}px ${S.xl}px` : `${S.xl}px`) }}>{children}</div>
+  </div>
+);
+
+// KPI tile — primary executive metric display.
+const KPI = ({ label, value, delta, deltaDir, sub, status, onClick, source }) => {
+  const statusColor = status === "alert" ? T.red : status === "warn" ? T.amber : status === "good" ? T.green : null;
+  const deltaColor = deltaDir === "up" ? T.green : deltaDir === "down" ? T.red : T.textDim;
+  const Wrap = onClick ? "button" : "div";
+  return (
+    <Wrap onClick={onClick} style={{
+      background: T.bgRaised,
+      border: "1px solid " + T.border,
+      borderRadius: 4,
+      padding: `${S.lg}px ${S.xl}px`,
+      cursor: onClick ? "pointer" : "default",
+      textAlign: "left",
+      display: "flex",
+      flexDirection: "column",
+      gap: S.sm,
+      transition: "border-color 0.12s ease",
+      position: "relative",
+    }}
+    onMouseEnter={e => { if (onClick) e.currentTarget.style.borderColor = T.borderBright; }}
+    onMouseLeave={e => { if (onClick) e.currentTarget.style.borderColor = T.border; }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: S.md }}>
+        <div style={{ ...TS.label, color: T.textDim, textTransform: "uppercase" }}>{label}</div>
+        {statusColor && <div style={{ width: 6, height: 6, borderRadius: 3, background: statusColor, boxShadow: "0 0 6px " + statusColor + "88" }} />}
+      </div>
+      <div style={{ ...TS.hero, color: T.text, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: S.md, minHeight: 16 }}>
+        {delta != null && (
+          <span style={{ ...TS.data, color: deltaColor, fontVariantNumeric: "tabular-nums" }}>
+            {deltaDir === "up" ? "▲" : deltaDir === "down" ? "▼" : "—"} {delta}
+          </span>
+        )}
+        {sub && <span style={{ ...TS.data, color: T.textFaint }}>{sub}</span>}
+        {source && <span style={{ ...TS.micro, color: T.textFaint, marginLeft: "auto", fontFamily: FF.mono }}>{source}</span>}
+      </div>
+    </Wrap>
+  );
+};
+
+// Button — single primitive, 3 variants, consistent.
+const Btn = ({ children, onClick, variant = "ghost", icon, loading, disabled, size = "md", full }) => {
+  const sz = size === "sm"
+    ? { padding: `${S.xs}px ${S.md}px`, fontSize: 11, height: 26 }
+    : { padding: `${S.sm}px ${S.lg}px`, fontSize: 12, height: 32 };
+
+  const variants = {
+    primary: { background: T.accent, color: "#fff", border: "1px solid " + T.accent, hoverBg: T.accentDim },
+    ghost:   { background: "transparent", color: T.text, border: "1px solid " + T.border, hoverBg: T.surface },
+    soft:    { background: T.surface, color: T.text, border: "1px solid " + T.border, hoverBg: T.surfaceHi },
+    danger:  { background: "transparent", color: T.red, border: "1px solid " + T.red + "55", hoverBg: T.red + "11" },
+  };
+  const v = variants[variant] || variants.ghost;
+
+  return (
+    <button onClick={onClick} disabled={disabled || loading}
+      style={{
+        background: v.background,
+        color: v.color,
+        border: v.border,
+        fontFamily: FF.body,
+        fontSize: sz.fontSize,
+        fontWeight: 500,
+        letterSpacing: 0,
+        padding: sz.padding,
+        height: sz.height,
+        cursor: disabled || loading ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: S.sm,
+        borderRadius: 3,
+        transition: "background 0.12s ease, border-color 0.12s ease",
+        width: full ? "100%" : "auto",
+        justifyContent: "center",
+        whiteSpace: "nowrap",
+      }}
+      onMouseEnter={e => { if (!disabled && !loading) e.currentTarget.style.background = v.hoverBg; }}
+      onMouseLeave={e => { if (!disabled && !loading) e.currentTarget.style.background = v.background; }}>
+      {loading ? <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={12} /></span> : icon && <Icon name={icon} size={12} />}
+      {children}
+    </button>
+  );
+};
+
+// ---------- TOP BAR ----------
+const TopBar = ({ onOpenPalette, onOpenSettings, hasKey }) => {
+  const [now, setNow] = useState(new Date());
+  const [syncStatus, setSyncStatus] = useState(Cloud._status);
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => Cloud.onStatus(setSyncStatus), []);
+  const time = now.toLocaleTimeString("en-US", { hour12: false });
+  const date = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const syncColor = { off: T.textFaint, idle: T.textDim, syncing: T.cyan, ok: T.green, error: T.red }[syncStatus.state] || T.textFaint;
+  const syncLabel = { off: "OFFLINE", idle: "READY", syncing: "SYNC", ok: "LIVE", error: "ERR" }[syncStatus.state] || "";
+
+  const StatusDot = ({ color, label, glow }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: S.sm }}>
+      <div style={{
+        width: 6, height: 6, borderRadius: 3, background: color,
+        boxShadow: glow ? `0 0 5px ${color}aa` : "none",
+      }} />
+      <span style={{ ...TS.micro, color: T.textDim, fontFamily: FF.mono, textTransform: "uppercase" }}>{label}</span>
+    </div>
+  );
+
+  return (
+    <div style={{
+      height: 48,
+      background: T.bg,
+      borderBottom: "1px solid " + T.border,
+      display: "flex",
+      alignItems: "center",
+      padding: `0 ${S.xl}px`,
+      gap: S.xl,
+    }}>
+      {/* Brand */}
+      <div style={{ display: "flex", alignItems: "center", gap: S.md }}>
+        <div style={{
+          width: 24, height: 24,
+          background: T.accent,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          borderRadius: 3,
+        }}>
+          <span style={{ fontFamily: FF.body, fontSize: 13, fontWeight: 700, color: "#fff", letterSpacing: -0.3 }}>E</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: S.md }}>
+          <span style={{ ...TS.label, color: T.text, textTransform: "uppercase", fontWeight: 600 }}>EXEC-OS</span>
+          <span style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono }}>v0.3</span>
+        </div>
+      </div>
+
+      <div style={{ flex: 1 }} />
+
+      {/* Command palette trigger */}
+      <button onClick={onOpenPalette} style={{
+        background: T.bgRaised,
+        border: "1px solid " + T.border,
+        color: T.textDim,
+        ...TS.body,
+        padding: `${S.sm}px ${S.lg}px`,
+        height: 30,
+        display: "flex", alignItems: "center", gap: S.md,
+        cursor: "pointer", borderRadius: 3,
+        minWidth: 240,
+        transition: "border-color 0.12s",
+      }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = T.borderBright}
+      onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
+        <Icon name="search" size={12} color={T.textFaint} />
+        <span style={{ ...TS.body, color: T.textFaint }}>Search or jump to…</span>
+        <span style={{ flex: 1 }} />
+        <kbd style={{
+          fontFamily: FF.mono, fontSize: 10, color: T.textFaint,
+          background: T.bgSunken, border: "1px solid " + T.border, borderRadius: 2,
+          padding: "1px 5px",
+        }}>⌘K</kbd>
+      </button>
+
+      {/* Status cluster */}
+      <div style={{ display: "flex", alignItems: "center", gap: S.lg, paddingLeft: S.md, borderLeft: "1px solid " + T.borderFaint, height: 24 }}>
+        <StatusDot color={syncColor} label={syncLabel} glow={syncStatus.state === "ok" || syncStatus.state === "syncing"} />
+        <StatusDot color={hasKey ? T.green : T.red} label={hasKey ? "API" : "NO KEY"} glow={hasKey} />
+      </div>
+
+      {/* Clock */}
+      <div style={{
+        fontFamily: FF.mono, fontSize: 11, color: T.text,
+        paddingLeft: S.lg, borderLeft: "1px solid " + T.borderFaint,
+        height: 24, display: "flex", alignItems: "center", gap: S.md,
+      }}>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>{time}</span>
+        <span style={{ color: T.textFaint }}>{date}</span>
+      </div>
+
+      {/* Settings */}
+      <button onClick={onOpenSettings} style={{
+        background: "transparent", border: "1px solid " + T.border,
+        color: T.textDim, padding: S.sm, cursor: "pointer", borderRadius: 3,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 30, height: 30,
+        transition: "border-color 0.12s, color 0.12s",
+      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderBright; e.currentTarget.style.color = T.text; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.textDim; }}>
+        <Icon name="cog" size={14} />
+      </button>
+    </div>
+  );
+};
+
+// ---------- SIDEBAR ----------
+const Sidebar = ({ active, onChange }) => {
+  const items = [
+    { id: "dashboard", label: "Dashboard", icon: "dash" },
+    { id: "terminal", label: "Terminal", icon: "term" },
+    { id: "sites", label: "Sites", icon: "hex" },
+    { id: "focus", label: "Focus OS", icon: "brain" },
+    { id: "email", label: "Email Intel", icon: "mail" },
+    { id: "reports", label: "Reports", icon: "file" },
+    { id: "memory", label: "Memory", icon: "brain" },
+    { id: "notes", label: "Notes", icon: "file" },
+    { id: "audit", label: "Audit Log", icon: "list" },
+    { id: "theme", label: "Theme", icon: "spark" },
+    { id: "help", label: "Help", icon: "key" },
+  ];
+  // Group by section
+  const groups = [
+    { name: "Operations", ids: ["dashboard", "terminal", "sites"] },
+    { name: "Workflows",  ids: ["focus", "email", "reports"] },
+    { name: "Knowledge",  ids: ["memory", "notes", "audit"] },
+    { name: "System",     ids: ["theme", "help"] },
+  ];
+  const byId = Object.fromEntries(items.map(i => [i.id, i]));
+
+  return (
+    <div style={{
+      width: 200,
+      background: T.bgSunken,
+      borderRight: "1px solid " + T.border,
+      padding: `${S.lg}px 0`,
+      display: "flex",
+      flexDirection: "column",
+      flexShrink: 0,
+    }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: `0 ${S.md}px` }}>
+        {groups.map((g, gi) => (
+          <div key={g.name} style={{ marginTop: gi === 0 ? 0 : S.lg }}>
+            <div style={{
+              ...TS.micro,
+              color: T.textFaint,
+              padding: `${S.sm}px ${S.md}px`,
+              textTransform: "uppercase",
+              fontWeight: 600,
+            }}>{g.name}</div>
+            {g.ids.map(id => {
+              const it = byId[id];
+              if (!it) return null;
+              const isActive = active === id;
+              return (
+                <button key={id} onClick={() => onChange(id)}
+                  style={{
+                    background: isActive ? T.surface : "transparent",
+                    border: "none",
+                    color: isActive ? T.text : T.textDim,
+                    fontFamily: FF.body,
+                    fontSize: 13,
+                    fontWeight: isActive ? 500 : 400,
+                    padding: `${S.sm}px ${S.md}px`,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: S.md,
+                    cursor: "pointer",
+                    textAlign: "left",
+                    transition: "color 0.12s, background 0.12s",
+                    width: "100%",
+                    borderRadius: 3,
+                    height: 30,
+                    position: "relative",
+                  }}
+                  onMouseEnter={e => { if (!isActive) { e.currentTarget.style.color = T.text; e.currentTarget.style.background = T.surface + "55"; } }}
+                  onMouseLeave={e => { if (!isActive) { e.currentTarget.style.color = T.textDim; e.currentTarget.style.background = "transparent"; } }}>
+                  {isActive && <div style={{ position: "absolute", left: -S.md, top: 6, bottom: 6, width: 2, background: T.accent, borderRadius: 1 }} />}
+                  <Icon name={it.icon} size={14} color={isActive ? T.accent : "currentColor"} />
+                  <span>{it.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* Operator card — bottom of sidebar */}
+      <div style={{ padding: `${S.md}px ${S.md}px 0`, borderTop: "1px solid " + T.borderFaint, margin: `${S.lg}px ${S.md}px 0` }}>
+        <div style={{ ...TS.micro, color: T.textFaint, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: S.xs }}>Operator</div>
+        <div style={{ ...TS.body, color: T.text, fontWeight: 500 }}>Twiney Riley Sr.</div>
+        <div style={{ ...TS.micro, color: T.textDim, fontFamily: FF.mono, marginTop: 1 }}>Director · Systems Maint</div>
+        <div style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono, marginTop: 1, paddingBottom: S.md }}>Crothall · MedStar</div>
+      </div>
+    </div>
+  );
+};
+
+// ---------- TODO LIST ----------
+const TodoList = () => {
+  const [items, setItems] = useState(() => LS.get("todo_items", []));
+  const [draft, setDraft] = useState("");
+
+  const persist = (next) => { setItems(next); LS.set("todo_items", next); };
+  const add = () => {
+    const t = draft.trim();
+    if (!t) return;
+    persist([{ id: Date.now(), text: t, done: false }, ...items]);
+    setDraft("");
+  };
+  const toggle = (id) => persist(items.map(i => i.id === id ? { ...i, done: !i.done } : i));
+  const remove = (id) => persist(items.filter(i => i.id !== id));
+  const clearDone = () => persist(items.filter(i => !i.done));
+  const doneCount = items.filter(i => i.done).length;
+  const openCount = items.length - doneCount;
+
+  return (
+    <Panel title={"To-Do" + (openCount ? " — " + openCount + " open" : "")} action={
+      doneCount > 0 && (
+        <button onClick={clearDone} style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>
+          CLEAR DONE
+        </button>
+      )
+    }>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <input value={draft} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") add(); }}
+          placeholder="Add a task..."
+          style={{ flex: 1, background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "8px 12px", borderRadius: 2 }} />
+        <button onClick={add} disabled={!draft.trim()}
+          style={{ background: T.brass, border: "1px solid " + T.brass, color: T.bg, fontFamily: FF.mono, fontSize: 16, padding: "4px 14px", cursor: draft.trim() ? "pointer" : "not-allowed", opacity: draft.trim() ? 1 : 0.4, borderRadius: 2, fontWeight: 600, lineHeight: 1 }}>
+          +
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, padding: "24px 0", textAlign: "center", letterSpacing: 1.2 }}>NO ITEMS YET</div>
+      ) : (
+        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+          {items.map((item, i) => (
+            <div key={item.id}
+              style={{ display: "flex", gap: 10, padding: "9px 0", borderBottom: i < items.length - 1 ? "1px solid " + T.border : "none", alignItems: "flex-start", opacity: item.done ? 0.45 : 1 }}>
+              <button onClick={() => toggle(item.id)}
+                style={{ width: 18, height: 18, minWidth: 18, border: "1.5px solid " + (item.done ? T.green : T.borderBright), background: item.done ? T.green + "22" : "transparent", borderRadius: 2, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>
+                {item.done && <Icon name="check" size={11} color={T.green} />}
+              </button>
+              <div style={{ flex: 1, minWidth: 0, fontFamily: FF.body, fontSize: 13, color: T.text, textDecoration: item.done ? "line-through" : "none", lineHeight: 1.4, wordBreak: "break-word" }}>
+                {item.text}
+              </div>
+              <button onClick={() => remove(item.id)}
+                style={{ background: "transparent", border: "none", color: T.textFaint, fontFamily: FF.mono, fontSize: 16, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}
+                onMouseEnter={e => e.currentTarget.style.color = T.red}
+                onMouseLeave={e => e.currentTarget.style.color = T.textFaint}>
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+};
+
+// ---------- DASHBOARD ----------
+// Live tasks are mirrored to window so callClaude injects them as context.
+window.EXEC_OS_LIVE_TASKS = window.EXEC_OS_LIVE_TASKS || [];
+
+// Task classification helpers (single source of truth)
+const TaskUtil = {
+  isDone: (t) => /complete|done|closed/i.test(t?.status || ""),
+  isBlocked: (t) => /block|hold|stuck|wait/i.test(t?.status || ""),
+  isInProgress: (t) => /progress|active|started|nearing/i.test(t?.status || ""),
+  isHigh: (t) => /high|urgent|critical|^1$/i.test(t?.priority || "") || /priority/i.test(t?.raw?.Category || ""),
+  isOverdue: (t) => {
+    if (!t?.dueDate || TaskUtil.isDone(t)) return false;
+    const due = new Date(t.dueDate);
+    return !isNaN(due.getTime()) && due < new Date();
+  },
+  ageInDays: (t) => {
+    const start = t?.startDate || t?.dueDate;
+    if (!start) return null;
+    const s = new Date(start);
+    if (isNaN(s.getTime())) return null;
+    return Math.floor((Date.now() - s.getTime()) / 86400000);
+  },
+  statusColor: (t) => {
+    if (TaskUtil.isDone(t)) return T.green;
+    if (TaskUtil.isBlocked(t)) return T.red;
+    if (TaskUtil.isInProgress(t)) return T.cyan;
+    return T.amber;
+  },
+};
+
+// Compute KPIs from real data sources
+function computeKpis(tasks, sites, audit) {
+  const openTasks = tasks.filter(t => !TaskUtil.isDone(t));
+  const overdue = tasks.filter(TaskUtil.isOverdue);
+  const blocked = tasks.filter(t => TaskUtil.isBlocked(t) && !TaskUtil.isDone(t));
+  const mine = openTasks.filter(t => /antoine|riley|twiney/i.test(t.owner || ""));
+  const completedRecent = tasks.filter(t => {
+    if (!TaskUtil.isDone(t)) return false;
+    const end = t.raw?.["End Date"];
+    if (!end) return false;
+    const d = new Date(end);
+    if (isNaN(d.getTime())) return false;
+    return (Date.now() - d.getTime()) < 7 * 86400000;
+  });
+
+  // Per-owner load
+  const ownerLoad = {};
+  for (const t of openTasks) {
+    const o = t.owner || "Unassigned";
+    ownerLoad[o] = (ownerLoad[o] || 0) + 1;
+  }
+  const topOwner = Object.entries(ownerLoad).sort((a, b) => b[1] - a[1])[0];
+
+  // Sites status
+  const alertSites = sites.filter(s => s.status === "alert").length;
+  const watchSites = sites.filter(s => s.status === "watch").length;
+
+  // Audit
+  const auditToday = audit.filter(a => (Date.now() - new Date(a.ts).getTime()) < 86400000);
+  const auditErrors = auditToday.filter(a => a.status === "error").length;
+
+  return {
+    openTasks: openTasks.length,
+    overdue: overdue.length,
+    blocked: blocked.length,
+    mine: mine.length,
+    completedThisWeek: completedRecent.length,
+    topOwner: topOwner ? { name: topOwner[0], count: topOwner[1] } : null,
+    alertSites, watchSites,
+    auditTodayCount: auditToday.length,
+    auditErrors,
+  };
+}
+
+// Dense task table row
+const TaskRow = ({ task, onClick }) => {
+  const done = TaskUtil.isDone(task);
+  const overdue = TaskUtil.isOverdue(task);
+  const high = TaskUtil.isHigh(task);
+  const sColor = TaskUtil.statusColor(task);
+  const age = TaskUtil.ageInDays(task);
+
+  return (
+    <tr onClick={onClick} style={{
+      cursor: "pointer",
+      borderBottom: "1px solid " + T.borderFaint,
+      transition: "background 0.1s",
+      opacity: done ? 0.5 : 1,
+    }}
+    onMouseEnter={e => e.currentTarget.style.background = T.surface}
+    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+      {/* Status dot */}
+      <td style={{ padding: `${S.md}px ${S.lg}px`, width: 24, verticalAlign: "top", paddingTop: 14 }}>
+        <div style={{
+          width: 6, height: 6, borderRadius: 3, background: sColor,
+          boxShadow: done ? "none" : `0 0 4px ${sColor}88`,
+        }} />
+      </td>
+      {/* Task */}
+      <td style={{ padding: `${S.md}px ${S.md}px`, verticalAlign: "top" }}>
+        <div style={{
+          ...TS.body, color: T.text,
+          textDecoration: done ? "line-through" : "none",
+          fontWeight: high ? 500 : 400,
+          lineHeight: 1.4,
+        }}>{task.task || "(untitled)"}</div>
+        {task.notes && (
+          <div style={{ ...TS.micro, color: T.textFaint, marginTop: 3, lineHeight: 1.4, maxWidth: 720, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {task.notes.replace(/\n/g, " · ")}
+          </div>
+        )}
+      </td>
+      {/* Status */}
+      <td style={{ padding: `${S.md}px ${S.md}px`, verticalAlign: "top", whiteSpace: "nowrap" }}>
+        <Pill color={sColor}>{task.status || "—"}</Pill>
+      </td>
+      {/* Owner */}
+      <td style={{ padding: `${S.md}px ${S.md}px`, verticalAlign: "top", whiteSpace: "nowrap" }}>
+        <span style={{ ...TS.data, color: T.text }}>{task.owner || "—"}</span>
+      </td>
+      {/* Site */}
+      <td style={{ padding: `${S.md}px ${S.md}px`, verticalAlign: "top", whiteSpace: "nowrap" }}>
+        {task.site
+          ? <span style={{ ...TS.data, fontFamily: FF.mono, color: T.accent, fontWeight: 500 }}>{task.site}</span>
+          : <span style={{ ...TS.data, color: T.textFaint }}>—</span>}
+      </td>
+      {/* Due */}
+      <td style={{ padding: `${S.md}px ${S.md}px`, verticalAlign: "top", whiteSpace: "nowrap" }}>
+        {task.dueDate
+          ? <span style={{
+              ...TS.data, fontFamily: FF.mono,
+              color: overdue ? T.red : T.text,
+              fontVariantNumeric: "tabular-nums",
+            }}>{task.dueDate}{overdue && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 600 }}>OVERDUE</span>}</span>
+          : <span style={{ ...TS.data, color: T.textFaint }}>—</span>}
+      </td>
+      {/* Age */}
+      <td style={{ padding: `${S.md}px ${S.lg}px`, verticalAlign: "top", whiteSpace: "nowrap", textAlign: "right" }}>
+        {age != null
+          ? <span style={{ ...TS.data, fontFamily: FF.mono, color: age > 30 ? T.amber : T.textDim, fontVariantNumeric: "tabular-nums" }}>{age}d</span>
+          : <span style={{ ...TS.data, color: T.textFaint }}>—</span>}
+      </td>
+    </tr>
+  );
+};
+
+const Dashboard = ({ onJump }) => {
+  const [tasksApi, setTasksApi] = useState(() => LS.get("tasks_api_url", ""));
+  const [tasks, setTasks] = useState([]);
+  const [sheetName, setSheetName] = useState("");
+  const [fetchedAt, setFetchedAt] = useState(0);
+  const [tasksError, setTasksError] = useState("");
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftTasksApi, setDraftTasksApi] = useState("");
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [filter, setFilter] = useState("open");
+  const [siteFilter, setSiteFilter] = useState("");
+  const [sortBy, setSortBy] = useState({ field: "default", dir: "asc" });
+  const [sites] = useState(() => LS.get("sites", []));
+  const [audit] = useState(() => LS.get("audit_log", []));
+  const [, forceRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!tasksApi) { setTasks([]); setTasksError(""); window.EXEC_OS_LIVE_TASKS = []; return; }
+    let cancelled = false;
+    setTasksLoading(true); setTasksError("");
+    fetch(tasksApi, { cache: "no-store" })
+      .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(data => {
+        if (cancelled) return;
+        const arr = Array.isArray(data) ? data : (data.tasks || data.rows || data.data || []);
+        setTasks(arr);
+        setSheetName(data.sheetName || "");
+        setFetchedAt(Date.now());
+        window.EXEC_OS_LIVE_TASKS = arr;
+      })
+      .catch(e => {
+        if (cancelled) return;
+        const msg = e.message || String(e);
+        if (msg.includes("Failed to fetch")) setTasksError("Cannot reach endpoint. Check URL or Vercel deploy.");
+        else if (msg.includes("HTTP 401")) setTasksError("Token rejected. Verify EXEC_OS_PUBLIC_TOKEN matches.");
+        else if (msg.includes("HTTP 404")) setTasksError("Endpoint not found. The route may not be deployed.");
+        else setTasksError(msg);
+      })
+      .finally(() => { if (!cancelled) setTasksLoading(false); });
+    return () => { cancelled = true; };
+  }, [tasksApi, refreshTick]);
+
+  useEffect(() => {
+    if (!tasksApi) return;
+    const t = setInterval(() => setRefreshTick(x => x + 1), 60000);
+    return () => clearInterval(t);
+  }, [tasksApi]);
+
+  // Force-update timestamp display every second
+  useEffect(() => {
+    const t = setInterval(() => forceRefresh(x => x + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const saveUrls = () => { const a = draftTasksApi.trim(); setTasksApi(a); LS.set("tasks_api_url", a); setEditing(false); };
+  const startEdit = () => { setDraftTasksApi(tasksApi); setEditing(true); };
+
+  const kpis = computeKpis(tasks, sites, audit);
+
+  // Filter + sort
+  const filteredTasks = tasks.filter(t => {
+    if (siteFilter && (t.site || "").toUpperCase() !== siteFilter) return false;
+    if (filter === "all") return true;
+    if (filter === "overdue") return TaskUtil.isOverdue(t);
+    if (filter === "high") return TaskUtil.isHigh(t) && !TaskUtil.isDone(t);
+    if (filter === "blocked") return TaskUtil.isBlocked(t) && !TaskUtil.isDone(t);
+    if (filter === "mine") return /antoine|riley|twiney/i.test(t.owner || "") && !TaskUtil.isDone(t);
+    return !TaskUtil.isDone(t);
+  });
+
+  const sortedTasks = [...filteredTasks].sort((a, b) => {
+    if (sortBy.field === "default") {
+      const ad = TaskUtil.isDone(a) ? 1 : 0;
+      const bd = TaskUtil.isDone(b) ? 1 : 0;
+      if (ad !== bd) return ad - bd;
+      const ao = TaskUtil.isOverdue(a) ? 0 : 1;
+      const bo = TaskUtil.isOverdue(b) ? 0 : 1;
+      if (ao !== bo) return ao - bo;
+      return 0;
+    }
+    const dir = sortBy.dir === "asc" ? 1 : -1;
+    const av = (a[sortBy.field] || "").toString().toLowerCase();
+    const bv = (b[sortBy.field] || "").toString().toLowerCase();
+    return av < bv ? -dir : av > bv ? dir : 0;
+  });
+
+  const sitesInTasks = [...new Set(tasks.map(t => (t.site || "").toUpperCase()).filter(Boolean))].sort();
+
+  const lastUpdate = fetchedAt ? Math.max(1, Math.floor((Date.now() - fetchedAt) / 1000)) : null;
+
+  // Alerts: overdue tasks + blocked tasks + sites in alert
+  const alerts = [];
+  if (kpis.overdue > 0) alerts.push({ level: "alert", text: `${kpis.overdue} ${kpis.overdue === 1 ? "task is" : "tasks are"} overdue`, action: () => setFilter("overdue") });
+  if (kpis.blocked > 0) alerts.push({ level: "warn", text: `${kpis.blocked} ${kpis.blocked === 1 ? "task is" : "tasks are"} blocked or on hold`, action: () => setFilter("blocked") });
+  if (kpis.alertSites > 0) alerts.push({ level: "alert", text: `${kpis.alertSites} ${kpis.alertSites === 1 ? "site is" : "sites are"} flagged ALERT`, action: () => onJump("sites") });
+  if (kpis.watchSites > 0) alerts.push({ level: "warn", text: `${kpis.watchSites} ${kpis.watchSites === 1 ? "site is" : "sites are"} on WATCH`, action: () => onJump("sites") });
+  if (kpis.auditErrors > 0) alerts.push({ level: "warn", text: `${kpis.auditErrors} AI call ${kpis.auditErrors === 1 ? "error" : "errors"} in the last 24h`, action: () => onJump("audit") });
+
+  if (!tasksApi && tasks.length === 0) {
+    return (
+      <DashboardSetup onConfigure={startEdit} editing={editing} draftTasksApi={draftTasksApi} setDraftTasksApi={setDraftTasksApi} onSave={saveUrls} onCancel={() => setEditing(false)} />
+    );
+  }
+
+  return (
+    <div style={{ padding: S.xxl, display: "flex", flexDirection: "column", gap: S.xl, maxWidth: 1600, margin: "0 auto" }}>
+
+      {/* Header — minimal, contextual */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: S.lg }}>
+        <div>
+          <div style={{ ...TS.label, color: T.textDim, textTransform: "uppercase", marginBottom: S.xs }}>Executive Dashboard</div>
+          <div style={{ ...TS.h1, color: T.text }}>Operations Overview</div>
+        </div>
+        <div style={{ display: "flex", gap: S.md, alignItems: "center" }}>
+          {fetchedAt > 0 && (
+            <span style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono }}>
+              Updated {lastUpdate < 60 ? `${lastUpdate}s` : `${Math.floor(lastUpdate / 60)}m`} ago
+            </span>
+          )}
+          <Btn icon="load" onClick={() => setRefreshTick(x => x + 1)} size="sm" variant="ghost">Refresh</Btn>
+          <Btn icon="spark" variant="primary" size="sm" onClick={() => onJump("terminal")}>Brief Me</Btn>
+        </div>
+      </div>
+
+      {/* Alerts strip — only renders when there are alerts */}
+      {alerts.length > 0 && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${Math.min(alerts.length, 3)}, 1fr)`,
+          gap: S.md,
+        }}>
+          {alerts.slice(0, 6).map((a, i) => {
+            const c = a.level === "alert" ? T.red : T.amber;
+            return (
+              <button key={i} onClick={a.action} style={{
+                background: c + "0d",
+                border: "1px solid " + c + "33",
+                borderLeft: "2px solid " + c,
+                borderRadius: 3,
+                padding: `${S.md}px ${S.lg}px`,
+                display: "flex", alignItems: "center", gap: S.md,
+                cursor: "pointer", textAlign: "left",
+                transition: "background 0.12s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = c + "18"}
+              onMouseLeave={e => e.currentTarget.style.background = c + "0d"}>
+                <div style={{ width: 6, height: 6, borderRadius: 3, background: c, boxShadow: `0 0 5px ${c}88` }} />
+                <span style={{ ...TS.body, color: T.text, flex: 1 }}>{a.text}</span>
+                <span style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono }}>→</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* KPI strip — 6 metrics from real data */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: S.md }}>
+        <KPI label="Open Tasks"   value={kpis.openTasks}   sub={`of ${tasks.length} total`}    source="Smartsheet" onClick={() => setFilter("open")} />
+        <KPI label="Overdue"      value={kpis.overdue}     status={kpis.overdue > 0 ? "alert" : "good"} source="Smartsheet" onClick={() => setFilter("overdue")} />
+        <KPI label="Blocked"      value={kpis.blocked}     status={kpis.blocked > 0 ? "warn" : "good"} source="Smartsheet" onClick={() => setFilter("blocked")} />
+        <KPI label="My Tasks"     value={kpis.mine}        sub="open · assigned to me" source="Smartsheet" onClick={() => setFilter("mine")} />
+        <KPI label="Closed · 7d"  value={kpis.completedThisWeek} sub="rolling week"   source="Smartsheet" />
+        <KPI label="Sites Alert"  value={kpis.alertSites}  sub={`${kpis.watchSites} on watch`} status={kpis.alertSites > 0 ? "alert" : kpis.watchSites > 0 ? "warn" : "good"} source="Sites" onClick={() => onJump("sites")} />
+      </div>
+
+      {/* Tasks table — dense, sortable, filterable */}
+      <Panel
+        title={sheetName ? sheetName : "Priority Tasks"}
+        subtitle={tasksApi ? "Live · auto-refresh 60s" : "Configure endpoint"}
+        action={
+          <>
+            {tasksLoading && <span style={{ ...TS.micro, color: T.cyan, fontFamily: FF.mono }}>SYNCING</span>}
+            <Btn size="sm" variant="ghost" onClick={startEdit}>Configure</Btn>
+          </>
+        }
+        noPad
+      >
+        {editing && (
+          <div style={{ padding: S.xl, borderBottom: "1px solid " + T.borderFaint, background: T.bgSunken }}>
+            <div style={{ ...TS.body, color: T.textDim, marginBottom: S.md }}>
+              Endpoint URL — must include the token parameter
+            </div>
+            <div style={{ display: "flex", gap: S.md }}>
+              <input value={draftTasksApi} onChange={e => setDraftTasksApi(e.target.value)}
+                placeholder="https://priority-task-six.vercel.app/api/smartsheet/tasks?token=..."
+                style={{
+                  flex: 1,
+                  background: T.bg, border: "1px solid " + T.border,
+                  color: T.text, fontFamily: FF.mono, fontSize: 12,
+                  padding: `${S.sm}px ${S.lg}px`, borderRadius: 3, height: 32,
+                }} />
+              <Btn size="sm" onClick={() => setEditing(false)}>Cancel</Btn>
+              <Btn size="sm" variant="primary" onClick={saveUrls}>Save</Btn>
+            </div>
+          </div>
+        )}
+
+        {/* Filter bar */}
+        <div style={{
+          display: "flex",
+          gap: S.xs,
+          padding: `${S.md}px ${S.lg}px`,
+          borderBottom: "1px solid " + T.borderFaint,
+          background: T.bgSunken,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}>
+          {[
+            { id: "open",    label: "Open",     n: kpis.openTasks },
+            { id: "overdue", label: "Overdue",  n: kpis.overdue, color: T.red },
+            { id: "blocked", label: "Blocked",  n: kpis.blocked, color: T.amber },
+            { id: "high",    label: "High",     n: tasks.filter(t => TaskUtil.isHigh(t) && !TaskUtil.isDone(t)).length },
+            { id: "mine",    label: "Mine",     n: kpis.mine },
+            { id: "all",     label: "All",      n: tasks.length },
+          ].map(f => {
+            const active = filter === f.id;
+            const c = f.color || T.accent;
+            return (
+              <button key={f.id} onClick={() => setFilter(f.id)} style={{
+                background: active ? c + "1a" : "transparent",
+                border: "1px solid " + (active ? c + "55" : "transparent"),
+                color: active ? c : T.textDim,
+                fontFamily: FF.body, fontSize: 11, fontWeight: 500,
+                padding: `${S.xs}px ${S.md}px`, height: 24, cursor: "pointer", borderRadius: 3,
+                display: "inline-flex", alignItems: "center", gap: S.sm,
+                transition: "all 0.12s",
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.color = T.text; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.color = T.textDim; }}>
+                <span>{f.label}</span>
+                <span style={{ fontFamily: FF.mono, fontSize: 10, color: active ? c : T.textFaint, fontVariantNumeric: "tabular-nums" }}>{f.n}</span>
+              </button>
+            );
+          })}
+          {sitesInTasks.length > 0 && (
+            <>
+              <div style={{ width: 1, height: 18, background: T.borderFaint, margin: `0 ${S.sm}px` }} />
+              <span style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono, marginRight: S.xs }}>SITE</span>
+              <button onClick={() => setSiteFilter("")} style={{
+                background: !siteFilter ? T.surface : "transparent",
+                border: "1px solid " + (!siteFilter ? T.borderBright : "transparent"),
+                color: !siteFilter ? T.text : T.textDim,
+                fontFamily: FF.mono, fontSize: 10,
+                padding: `${S.xs}px ${S.md}px`, height: 24, cursor: "pointer", borderRadius: 3,
+              }}>ALL</button>
+              {sitesInTasks.map(s => (
+                <button key={s} onClick={() => setSiteFilter(s === siteFilter ? "" : s)} style={{
+                  background: siteFilter === s ? T.accent + "1a" : "transparent",
+                  border: "1px solid " + (siteFilter === s ? T.accent + "55" : "transparent"),
+                  color: siteFilter === s ? T.accent : T.textDim,
+                  fontFamily: FF.mono, fontSize: 10,
+                  padding: `${S.xs}px ${S.md}px`, height: 24, cursor: "pointer", borderRadius: 3,
+                }}>{s}</button>
+              ))}
+            </>
+          )}
+          <div style={{ flex: 1 }} />
+          <span style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono }}>{sortedTasks.length} shown</span>
+        </div>
+
+        {/* Error state */}
+        {tasksError && (
+          <div style={{ padding: S.xl }}>
+            <div style={{
+              ...TS.body, color: T.red, lineHeight: 1.5,
+              padding: `${S.md}px ${S.lg}px`,
+              background: T.red + "0d", border: "1px solid " + T.red + "33", borderRadius: 3,
+            }}>{tasksError}</div>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!tasksError && sortedTasks.length === 0 && (
+          <div style={{
+            padding: `${S.xxxl}px ${S.xl}px`,
+            textAlign: "center", color: T.textFaint,
+            ...TS.body,
+          }}>
+            No tasks match the current filter.
+          </div>
+        )}
+
+        {/* Task table */}
+        {!tasksError && sortedTasks.length > 0 && (
+          <div style={{ maxHeight: 560, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "auto" }}>
+              <thead>
+                <tr style={{
+                  position: "sticky", top: 0, background: T.bgSunken, zIndex: 2,
+                  borderBottom: "1px solid " + T.border,
+                }}>
+                  <th style={{ width: 24 }}></th>
+                  {[
+                    { f: "task",    label: "Task" },
+                    { f: "status",  label: "Status" },
+                    { f: "owner",   label: "Owner" },
+                    { f: "site",    label: "Site" },
+                    { f: "dueDate", label: "Due" },
+                    { f: null,      label: "Age", align: "right" },
+                  ].map(col => (
+                    <th key={col.label} style={{
+                      ...TS.micro,
+                      color: T.textDim,
+                      textTransform: "uppercase",
+                      fontWeight: 600,
+                      textAlign: col.align || "left",
+                      padding: `${S.md}px ${S.md}px`,
+                      whiteSpace: "nowrap",
+                      cursor: col.f ? "pointer" : "default",
+                      userSelect: "none",
+                    }}
+                    onClick={() => col.f && setSortBy(s => ({ field: col.f, dir: s.field === col.f && s.dir === "asc" ? "desc" : "asc" }))}>
+                      {col.label}
+                      {sortBy.field === col.f && <span style={{ marginLeft: 4 }}>{sortBy.dir === "asc" ? "↑" : "↓"}</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTasks.map(t => (
+                  <TaskRow key={t.id} task={t} onClick={() => onJump("terminal")} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      {/* Bottom row — owner load + workstreams */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: S.xl }}>
+        <Panel title="Open Tasks by Owner" subtitle="Workload distribution">
+          {(() => {
+            const ownerLoad = {};
+            for (const t of tasks.filter(x => !TaskUtil.isDone(x))) {
+              const o = t.owner || "Unassigned";
+              if (!ownerLoad[o]) ownerLoad[o] = { open: 0, overdue: 0, blocked: 0 };
+              ownerLoad[o].open++;
+              if (TaskUtil.isOverdue(t)) ownerLoad[o].overdue++;
+              if (TaskUtil.isBlocked(t)) ownerLoad[o].blocked++;
+            }
+            const sorted = Object.entries(ownerLoad).sort((a, b) => b[1].open - a[1].open);
+            const max = Math.max(...sorted.map(([_, v]) => v.open), 1);
+            return sorted.length === 0
+              ? <div style={{ ...TS.body, color: T.textFaint, padding: S.lg, textAlign: "center" }}>No open tasks.</div>
+              : (
+                <div style={{ display: "flex", flexDirection: "column", gap: S.md }}>
+                  {sorted.map(([name, v]) => (
+                    <div key={name} style={{ display: "flex", alignItems: "center", gap: S.lg }}>
+                      <div style={{ ...TS.body, color: T.text, width: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                      <div style={{ flex: 1, height: 6, background: T.bgSunken, borderRadius: 3, overflow: "hidden", display: "flex" }}>
+                        <div style={{
+                          width: `${(v.open / max) * 100}%`,
+                          background: v.overdue > 0 ? T.red : v.blocked > 0 ? T.amber : T.accent,
+                          height: "100%",
+                          transition: "width 0.3s",
+                        }} />
+                      </div>
+                      <div style={{ display: "flex", gap: S.md, fontFamily: FF.mono, fontSize: 11, color: T.textDim, fontVariantNumeric: "tabular-nums", minWidth: 80, justifyContent: "flex-end" }}>
+                        <span style={{ color: T.text }}>{v.open}</span>
+                        {v.overdue > 0 && <span style={{ color: T.red }}>{v.overdue}⚠</span>}
+                        {v.blocked > 0 && <span style={{ color: T.amber }}>{v.blocked}◐</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+          })()}
+        </Panel>
+
+        <Panel title="System" subtitle="Today">
+          <div style={{ display: "flex", flexDirection: "column", gap: S.md }}>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0`, borderBottom: "1px solid " + T.borderFaint }}>
+              <span style={{ ...TS.body, color: T.textDim }}>AI calls today</span>
+              <span style={{ ...TS.data, fontFamily: FF.mono, color: T.text, fontVariantNumeric: "tabular-nums" }}>{kpis.auditTodayCount}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0`, borderBottom: "1px solid " + T.borderFaint }}>
+              <span style={{ ...TS.body, color: T.textDim }}>Errors</span>
+              <span style={{ ...TS.data, fontFamily: FF.mono, color: kpis.auditErrors > 0 ? T.red : T.text, fontVariantNumeric: "tabular-nums" }}>{kpis.auditErrors}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0`, borderBottom: "1px solid " + T.borderFaint }}>
+              <span style={{ ...TS.body, color: T.textDim }}>Sites configured</span>
+              <span style={{ ...TS.data, fontFamily: FF.mono, color: T.text, fontVariantNumeric: "tabular-nums" }}>{sites.filter(s => s.name).length} / {sites.length || 10}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0` }}>
+              <span style={{ ...TS.body, color: T.textDim }}>Memory entries</span>
+              <span style={{ ...TS.data, fontFamily: FF.mono, color: T.text, fontVariantNumeric: "tabular-nums" }}>{LS.get("memories", []).length}</span>
+            </div>
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+};
+
+// Configuration screen when no endpoint is set up
+const DashboardSetup = ({ onConfigure, editing, draftTasksApi, setDraftTasksApi, onSave, onCancel }) => (
+  <div style={{ padding: S.xxl, display: "flex", flexDirection: "column", gap: S.xl, maxWidth: 720, margin: `${S.huge}px auto 0` }}>
+    <div>
+      <div style={{ ...TS.label, color: T.textDim, textTransform: "uppercase", marginBottom: S.xs }}>Executive Dashboard</div>
+      <div style={{ ...TS.h1, color: T.text, marginBottom: S.md }}>Connect your task source</div>
+      <div style={{ ...TS.body, color: T.textDim, lineHeight: 1.6 }}>
+        EXEC-OS pulls live priority tasks from Smartsheet through your Vercel endpoint. Configure the URL below to populate this dashboard.
+      </div>
+    </div>
+    <Panel title="Endpoint Configuration">
+      {editing ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: S.md }}>
+          <div style={{ ...TS.label, color: T.textDim, textTransform: "uppercase" }}>Tasks API URL</div>
+          <input value={draftTasksApi} onChange={e => setDraftTasksApi(e.target.value)}
+            placeholder="https://priority-task-six.vercel.app/api/smartsheet/tasks?token=..."
+            style={{
+              background: T.bg, border: "1px solid " + T.border,
+              color: T.text, fontFamily: FF.mono, fontSize: 12,
+              padding: `${S.sm}px ${S.lg}px`, borderRadius: 3, height: 32,
+            }} />
+          <div style={{ ...TS.micro, color: T.textFaint }}>
+            Include your EXEC_OS_PUBLIC_TOKEN as the token query parameter.
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: S.md, marginTop: S.md }}>
+            <Btn size="sm" onClick={onCancel}>Cancel</Btn>
+            <Btn size="sm" variant="primary" onClick={onSave}>Save & Connect</Btn>
+          </div>
+        </div>
+      ) : (
+        <Btn variant="primary" onClick={onConfigure}>Configure endpoint</Btn>
+      )}
+    </Panel>
+  </div>
+);
+
+// ---------- TERMINAL ----------
+const TerminalView = ({ apiKey, model }) => {
+  const [messages, setMessages] = useState(() => LS.get("terminal_messages", []));
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [convoActive, setConvoActive] = useState(false);
+  const [convoState, setConvoState] = useState("idle"); // idle | listening | thinking | speaking
+  const [partial, setPartial] = useState("");
+  const scrollRef = useRef(null);
+  const sendRef = useRef(null);
+
+  useEffect(() => {
+    LS.set("terminal_messages", messages.slice(-40));
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages]);
+
+  // Cleanup on unmount — kill any active conversation
+  useEffect(() => () => { Convo.stop(); }, []);
+
+  const send = useCallback(async (text, opts = {}) => {
+    const prompt = (text ?? input).trim();
+    if (!prompt || loading) return;
+    setInput("");
+    setPartial("");
+    const next = [...messages, { role: "user", content: prompt, ts: Date.now() }];
+    setMessages(next);
+    setLoading(true);
+    try {
+      const history = next.slice(-10).filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })).slice(0, -1);
+      const reply = await callClaude({ prompt, history, apiKey, model, source: "terminal" });
+      setMessages(prev => [...prev, { role: "assistant", content: reply, ts: Date.now() }]);
+      if (opts.fromConvo && reply) {
+        // Speak it back; Convo handles re-listening when speech ends
+        Convo.speakReply(reply);
+      }
+    } catch (e) {
+      setMessages(prev => [...prev, { role: "system", content: e.message, ts: Date.now() }]);
+      if (opts.fromConvo) Convo.handleError();
+    } finally {
+      setLoading(false);
+    }
+  }, [input, loading, messages, apiKey, model]);
+
+  // Keep a ref so Convo callbacks (created once) call the latest send
+  useEffect(() => { sendRef.current = send; }, [send]);
+
+  // Wire Convo callbacks once
+  useEffect(() => {
+    Convo.setCallbacks({
+      onState: (s) => setConvoState(s),
+      onPartial: (t) => setPartial(t),
+      onSubmit: (t) => {
+        setPartial("");
+        if (sendRef.current) sendRef.current(t, { fromConvo: true });
+      },
+    });
+  }, []);
+
+  const startConvo = () => {
+    // Browsers require a user gesture to enable speechSynthesis; warm it up here
+    if (window.speechSynthesis) {
+      const u = new SpeechSynthesisUtterance("");
+      window.speechSynthesis.speak(u);
+    }
+    setConvoActive(true);
+    Convo.start();
+  };
+
+  const stopConvo = () => {
+    setConvoActive(false);
+    setPartial("");
+    Convo.stop();
+  };
+
+  const handleConvoTap = () => {
+    if (!convoActive) return startConvo();
+    // While active: tap = interrupt (stops Claude mid-sentence and starts listening, or stops listening and submits)
+    Convo.interrupt();
+  };
+
+  const stopAllVoice = () => { Convo.stop(); setConvoActive(false); };
+
+  const clear = () => { setMessages([]); LS.set("terminal_messages", []); };
+
+  const quickCmds = [
+    "Brief me on today's priorities",
+    "Draft a vendor escalation to Siemens about the SSO e-signature dispute",
+    "Summarize the MGUH AHU-6 issue for Chris Castle",
+    "Build me an executive outage report template",
+    "Compare PM completion across the 10 hospitals — what's the pattern?",
+    "Identify bottlenecks in the MWHC turnover checklist rollout",
+  ];
+
+  return (
+    <div style={{ padding: S.xxl, height: "100%", display: "flex", flexDirection: "column", gap: S.lg, maxWidth: 1400, margin: "0 auto", width: "100%" }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ ...TS.label, color: T.textDim, textTransform: "uppercase", marginBottom: S.xs }}>AI Command Terminal</div>
+          <div style={{ ...TS.h1, color: T.text }}>Talk to Claude</div>
+        </div>
+        <div style={{ display: "flex", gap: S.md, alignItems: "center" }}>
+          <ConvoButton active={convoActive} state={convoState} onClick={convoActive ? stopConvo : startConvo} />
+          <Btn icon="trash" onClick={clear} size="sm">Clear</Btn>
+        </div>
+      </div>
+
+      {/* Conversation panel — visible when convo mode is on */}
+      {convoActive && (
+        <ConvoPanel state={convoState} partial={partial} onInterrupt={handleConvoTap} onStop={stopConvo} />
+      )}
+
+      {/* Transcript */}
+      <div ref={scrollRef} style={{
+        flex: 1,
+        background: T.bgSunken,
+        border: "1px solid " + T.border,
+        borderRadius: 4,
+        padding: S.xl,
+        overflowY: "auto",
+        minHeight: 0,
+        ...TS.body,
+        color: T.text,
+      }}>
+        {messages.length === 0 && (
+          <div>
+            <div style={{ ...TS.body, color: T.accent, marginBottom: S.lg, fontWeight: 500 }}>EXEC-OS · session initialized</div>
+            <div style={{ ...TS.body, color: T.textDim, marginBottom: S.xl }}>
+              Type any executive request below. Or tap <b style={{ color: T.text }}>Conversation Mode</b> for hands-free voice.
+            </div>
+            <div style={{ ...TS.label, color: T.textFaint, textTransform: "uppercase", marginBottom: S.md }}>Quick Start</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: S.sm }}>
+              {quickCmds.map((c, i) => (
+                <button key={i} onClick={() => send(c)}
+                  style={{
+                    background: T.bgRaised,
+                    border: "1px solid " + T.border,
+                    color: T.text,
+                    ...TS.body,
+                    padding: `${S.md}px ${S.lg}px`,
+                    cursor: "pointer",
+                    borderRadius: 3,
+                    textAlign: "left",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: S.md,
+                    transition: "border-color 0.12s, background 0.12s",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderBright; e.currentTarget.style.background = T.surface; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.background = T.bgRaised; }}>
+                  <Icon name="arrow" size={12} color={T.accent} />{c}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} style={{ marginBottom: S.xl }}>
+            <div style={{ ...TS.label, color: m.role === "user" ? T.accent : m.role === "system" ? T.red : T.cyan, marginBottom: S.sm, textTransform: "uppercase", fontFamily: FF.mono }}>
+              {m.role === "user" ? "▸ TWINEY" : m.role === "system" ? "✕ SYSTEM" : "◉ EXEC-OS"}
+              <span style={{ color: T.textFaint, marginLeft: S.md, ...TS.micro, fontFamily: FF.mono }}>{new Date(m.ts).toLocaleTimeString("en-US", { hour12: false })}</span>
+            </div>
+            <div style={{
+              whiteSpace: "pre-wrap",
+              color: m.role === "system" ? T.red : T.text,
+              ...TS.body,
+              lineHeight: 1.6,
+              paddingLeft: S.lg,
+              borderLeft: "1px solid " + T.borderFaint,
+            }}>{m.content}</div>
+            {m.role === "assistant" && (
+              <div style={{ display: "flex", gap: S.xs, marginTop: S.md, paddingLeft: S.lg }}>
+                <button onClick={() => navigator.clipboard?.writeText(m.content)} style={{
+                  background: "transparent", border: "1px solid " + T.border, color: T.textDim,
+                  fontFamily: FF.mono, fontSize: 10, padding: `${S.xs}px ${S.md}px`,
+                  cursor: "pointer", borderRadius: 3, letterSpacing: 0.4, textTransform: "uppercase",
+                  display: "flex", alignItems: "center", gap: S.xs,
+                }}>
+                  <Icon name="copy" size={10} /> Copy
+                </button>
+                <button onClick={() => { Voice.stopSpeaking(); Voice.speak(m.content); }} style={{
+                  background: "transparent", border: "1px solid " + T.border, color: T.textDim,
+                  fontFamily: FF.mono, fontSize: 10, padding: `${S.xs}px ${S.md}px`,
+                  cursor: "pointer", borderRadius: 3, letterSpacing: 0.4, textTransform: "uppercase",
+                  display: "flex", alignItems: "center", gap: S.xs,
+                }}>
+                  🔊 Read
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+        {loading && (
+          <div style={{ color: T.cyan, display: "flex", alignItems: "center", gap: S.sm, ...TS.label, textTransform: "uppercase", fontFamily: FF.mono }}>
+            <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={12} /></span>
+            <span>Thinking…</span>
+          </div>
+        )}
+      </div>
+
+      {/* Input bar */}
+      <div style={{
+        display: "flex", gap: S.md,
+        background: T.bgRaised,
+        border: "1px solid " + T.border,
+        borderRadius: 4, padding: S.xs,
+        transition: "border-color 0.2s",
+      }}>
+        <div style={{ color: T.accent, fontFamily: FF.mono, padding: `${S.md}px 0 ${S.md}px ${S.lg}px`, fontSize: 14 }}>▸</div>
+        <input value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder={convoActive ? "Conversation mode active — speak naturally" : "Tell EXEC-OS what you need…"}
+          disabled={convoActive}
+          style={{
+            flex: 1,
+            background: "transparent", border: "none", color: T.text,
+            fontFamily: FF.body, fontSize: 13,
+            padding: `${S.md}px 0`,
+            outline: "none",
+          }} />
+        <Btn icon="send" variant="primary" onClick={() => send()} loading={loading} disabled={convoActive}>Send</Btn>
+      </div>
+    </div>
+  );
+};
+
+// Single button that controls hands-free conversation mode
+const ConvoButton = ({ active, state, onClick }) => {
+  const label = !active ? "Conversation Mode"
+    : state === "listening" ? "Listening — tap to send"
+    : state === "thinking" ? "Thinking…"
+    : state === "speaking" ? "Speaking — tap to interrupt"
+    : "Conversation Active";
+  const color = !active ? T.text
+    : state === "listening" ? T.red
+    : state === "thinking" ? T.amber
+    : state === "speaking" ? T.cyan
+    : T.text;
+  const dotColor = state === "listening" ? T.red : state === "speaking" ? T.cyan : state === "thinking" ? T.amber : T.green;
+  return (
+    <button onClick={onClick} style={{
+      background: active ? T.surface : "transparent",
+      border: "1px solid " + (active ? T.borderBright : T.border),
+      color, fontFamily: FF.body, fontSize: 12, fontWeight: 500,
+      padding: `${S.sm}px ${S.lg}px`, height: 32, cursor: "pointer",
+      borderRadius: 3, display: "inline-flex", alignItems: "center", gap: S.sm,
+      transition: "all 0.12s",
+    }}>
+      {active ? (
+        <span style={{
+          width: 8, height: 8, borderRadius: 4,
+          background: dotColor,
+          boxShadow: `0 0 6px ${dotColor}aa`,
+          animation: state === "listening" || state === "thinking" ? "execos-spin 1.4s ease-in-out infinite" : "none",
+        }} />
+      ) : (
+        <span style={{ fontSize: 14 }}>🎙</span>
+      )}
+      <span>{label}</span>
+    </button>
+  );
+};
+
+// Live visual feedback panel during conversation
+const ConvoPanel = ({ state, partial, onInterrupt, onStop }) => {
+  const c = state === "listening" ? T.red
+          : state === "thinking"  ? T.amber
+          : state === "speaking"  ? T.cyan
+          : T.textFaint;
+  const label = state === "listening" ? "LISTENING"
+              : state === "thinking"  ? "PROCESSING"
+              : state === "speaking"  ? "SPEAKING"
+              : "READY";
+  const hint = state === "listening" ? "Speak naturally. Pause when done — Claude will reply."
+             : state === "thinking"  ? "Generating response from your live context…"
+             : state === "speaking"  ? "Tap to interrupt and speak again."
+             : "Establishing voice connection…";
+
+  return (
+    <div style={{
+      background: c + "0d",
+      border: "1px solid " + c + "44",
+      borderRadius: 4,
+      padding: `${S.lg}px ${S.xl}px`,
+      display: "flex",
+      alignItems: "center",
+      gap: S.lg,
+    }}>
+      <div style={{
+        width: 12, height: 12, borderRadius: 6, background: c,
+        boxShadow: `0 0 12px ${c}cc`,
+        flexShrink: 0,
+        animation: state !== "idle" ? "execos-pulse 1.4s ease-in-out infinite" : "none",
+      }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ ...TS.label, color: c, fontFamily: FF.mono, textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
+        {partial && state === "listening" ? (
+          <div style={{ ...TS.body, color: T.text, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{partial}"</div>
+        ) : (
+          <div style={{ ...TS.body, color: T.textDim }}>{hint}</div>
+        )}
+      </div>
+      <Btn size="sm" variant="ghost" onClick={onInterrupt}>
+        {state === "speaking" ? "Interrupt" : state === "listening" ? "Send now" : "Skip"}
+      </Btn>
+      <Btn size="sm" variant="danger" icon="pause" onClick={onStop}>Stop</Btn>
+    </div>
+  );
+};
+
+// ---------- FOCUS OS ----------
+const FOCUS_MODULES = [
+  { id:"shatter", name:"Task Paralysis Shatterer", icon:"hex", color:T.brass, blurb:"Break any frozen task into sub-1-minute steps. Get the exact first physical action.", input:"Task you're staring at",
+    prompt: v => `I'm staring at this task and cannot start: "${v}". Break it into ridiculously small steps, each under 1 minute. Then tell me the EXACT first physical action I should take in the next 30 seconds. No motivational language. Just the steps and the action.` },
+  { id:"dopamine", name:"Dopamine Menu", icon:"flame", color:T.red, blurb:"Under-stimulated and drifting? Get a structured menu of micro-engagements.", input:"What kind of work or mood?",
+    prompt: v => `Context: ${v}. I'm under-stimulated and disengaged. Build me a dopamine menu with three sections: 5-MINUTE APPETIZERS (quick wins), 20-MINUTE ENTREES (real progress), 10-MINUTE SIDES (low-effort momentum). 3 items per section. Each item one line.` },
+  { id:"double", name:"Body Double", icon:"target", color:T.cyan, blurb:"30-minute focus partner with check-ins. Acts as the presence that keeps you on task.", input:"What are you working on?",
+    prompt: v => `Act as my body double for a 30-minute focus block. I'm working on: "${v}". Give me: (1) a one-sentence intention to lock in, (2) the first 5-minute starter action, (3) what I should aim to have done by minute 15, (4) what done looks like at minute 30. Be present and direct, not motivational.` },
+  { id:"switch", name:"Context Switch", icon:"arrow", color:T.amber, blurb:"3-minute transition routine between tasks. Closes one loop and opens the next.", input:"From [Task A] → to [Task B]",
+    prompt: v => `I just finished one task and need to switch to another. Context: ${v}. Build a 3-minute transition routine: (1) 60-second close-out of the previous task, (2) 60-second physical/mental reset, (3) 60-second re-entry into the new task with the first concrete step. Specific actions only.` },
+  { id:"gamify", name:"Quest Mode", icon:"tri", color:T.brass, blurb:"Gamify a boring task using something you're actually into right now.", input:"Boring task + current interest",
+    prompt: v => `Gamify this for me. Input: ${v}. Frame the boring task as a quest using the lens of my current interest. Give me: QUEST NAME, OBJECTIVE, 3 milestones (each with XP value), 1 boss fight, and the reward at completion. Make it sharp, not corny.` },
+  { id:"dump", name:"Open Loop Dump", icon:"list", color:T.green, blurb:"Brain full? Dump everything. AI sorts into NOW / LATER / TRASH with one next step.", input:"Dump everything in your head",
+    prompt: v => `My brain is full. Here is everything: ${v}. Categorize each item into NOW (today), LATER (this week or later), or TRASH (delete from my head). Then give me ONE actionable next step to do in the next 10 minutes. Be ruthless about TRASH.` },
+];
+
+const FocusModuleRunner = ({ module, onBack, bd, apiKey, model }) => {
+  const [input, setInput] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState(() => LS.get("focus_" + module.id + "_history", []));
+
+  const run = async () => {
+    if (!input.trim() || loading) return;
+    setLoading(true); setOutput("");
+    try {
+      const reply = await callClaude({ prompt: module.prompt(input), apiKey, model });
+      setOutput(reply);
+      const newHist = [{ input, output: reply, ts: Date.now() }, ...history].slice(0, 10);
+      setHistory(newHist);
+      LS.set("focus_" + module.id + "_history", newHist);
+      if (module.id === "double") { bd.reset(); bd.setActive(true); }
+    } catch (e) { setOutput("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ padding: 22 }}>
+      <button onClick={onBack} style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.6, cursor: "pointer", padding: 0, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>← BACK TO FOCUS OS</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20 }}>
+        <div style={{ width: 48, height: 48, background: module.color + "18", border: "1px solid " + module.color + "55", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3 }}>
+          <Icon name={module.icon} size={22} color={module.color} />
+        </div>
+        <div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 26, fontWeight: 500, color: T.text, margin: 0, letterSpacing: -0.4, fontStyle: "italic" }}>{module.name}</h1>
+          <div style={{ fontFamily: FF.body, fontSize: 13, color: T.textDim, marginTop: 2 }}>{module.blurb}</div>
+        </div>
+      </div>
+      {module.id === "double" && bd.active && (
+        <div style={{ background: T.cyan + "10", border: "1px solid " + T.cyan + "55", padding: 18, borderRadius: 3, marginBottom: 16, display: "flex", alignItems: "center", gap: 18 }}>
+          <Icon name="timer" size={20} color={T.cyan} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.cyan, letterSpacing: 1.6 }}>BODY DOUBLE ACTIVE</div>
+            <div style={{ fontFamily: FF.display, fontSize: 32, fontWeight: 500, color: T.text, letterSpacing: -1 }}>
+              {String(Math.floor(bd.seconds / 60)).padStart(2, "0")}:{String(bd.seconds % 60).padStart(2, "0")}
+            </div>
+          </div>
+          <Btn icon="pause" onClick={() => bd.setActive(false)}>Pause</Btn>
+        </div>
+      )}
+      <Panel title={module.input}>
+        <textarea value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }}
+          placeholder="Type here. Cmd/Ctrl+Enter to run." rows={4}
+          style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 14, padding: 14, borderRadius: 2, resize: "vertical" }} />
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+          <Btn icon="zap" variant="primary" onClick={run} loading={loading}>Execute</Btn>
+        </div>
+      </Panel>
+      {output && (
+        <div style={{ marginTop: 14 }}>
+          <Panel title="Output" accent={module.color}>
+            <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{output}</div>
+            <div style={{ marginTop: 14 }}>
+              <Btn icon="copy" onClick={() => navigator.clipboard?.writeText(output)} size="sm">Copy</Btn>
+            </div>
+          </Panel>
+        </div>
+      )}
+      {history.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <Panel title={"History — " + module.name}>
+            {history.map((h, i) => (
+              <div key={i} style={{ padding: "10px 0", borderBottom: i < history.length - 1 ? "1px solid " + T.border : "none", cursor: "pointer" }}
+                onClick={() => { setInput(h.input); setOutput(h.output); }}>
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 1 }}>{new Date(h.ts).toLocaleString()}</div>
+                <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.text, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.input}</div>
+              </div>
+            ))}
+          </Panel>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const FocusOS = ({ apiKey, model }) => {
+  const [active, setActive] = useState(null);
+  const [bdActive, setBdActive] = useState(false);
+  const [bdSeconds, setBdSeconds] = useState(30 * 60);
+  useEffect(() => {
+    if (!bdActive) return;
+    const t = setInterval(() => setBdSeconds(s => { if (s <= 1) { setBdActive(false); return 0; } return s - 1; }), 1000);
+    return () => clearInterval(t);
+  }, [bdActive]);
+  const bd = { active: bdActive, seconds: bdSeconds, setActive: setBdActive, reset: () => setBdSeconds(30 * 60) };
+
+  if (active) return <FocusModuleRunner module={active} onBack={() => setActive(null)} bd={bd} apiKey={apiKey} model={model} />;
+
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Performance / Focus OS</div>
+        <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Six tools for when execution stalls.</h1>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+        {FOCUS_MODULES.map(m => (
+          <button key={m.id} onClick={() => setActive(m)}
+            style={{ background: T.bgRaised, border: "1px solid " + T.border, borderRadius: 3, padding: 20, textAlign: "left", cursor: "pointer", transition: "all 0.2s", display: "flex", flexDirection: "column", gap: 12 }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = m.color; e.currentTarget.style.transform = "translateY(-2px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}>
+            <div style={{ width: 36, height: 36, background: m.color + "18", border: "1px solid " + m.color + "44", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2 }}>
+              <Icon name={m.icon} size={16} color={m.color} />
+            </div>
+            <div>
+              <div style={{ fontFamily: FF.display, fontSize: 18, fontWeight: 500, color: T.text, letterSpacing: -0.3 }}>{m.name}</div>
+              <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.textDim, marginTop: 6, lineHeight: 1.5 }}>{m.blurb}</div>
+            </div>
+            <div style={{ fontFamily: FF.mono, fontSize: 10, color: m.color, letterSpacing: 1.4, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>LAUNCH <Icon name="arrow" size={11} /></div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ---------- EMAIL ----------
+const EmailView = ({ apiKey, model }) => {
+  const [emailText, setEmailText] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [activeAction, setActiveAction] = useState("");
+  const actions = [
+    { id:"summarize", label:"Summarize", icon:"file", prompt: e => `Summarize this email thread for an executive. 3 lines max. Then list any commitments, blockers, and unanswered questions.\n\n---\n${e}` },
+    { id:"draft", label:"Draft Reply", icon:"send", prompt: e => `Draft a professional reply to this email in Twiney's voice — direct, executive-appropriate, plain prose. No bullets unless content requires them.\n\n---\n${e}` },
+    { id:"firm", label:"Firm Reply", icon:"tri", prompt: e => `Draft a firm but professional reply. Hold the line, request what's needed in writing, no softening. Twiney's voice.\n\n---\n${e}` },
+    { id:"escalate", label:"Escalate", icon:"alert", prompt: e => `Draft an escalation message to leadership about the issue in this email. Open with the operational risk, then 2-3 sentences of context, then the specific decision or support needed. Twiney's voice.\n\n---\n${e}` },
+    { id:"actions", label:"Action List", icon:"list", prompt: e => `Convert this email into a numbered action list. Each action: owner, action, due date if stated. End with one line on any blockers.\n\n---\n${e}` },
+    { id:"commitments", label:"Commitments", icon:"check", prompt: e => `Extract every commitment made in this email thread — by whom, what, by when. Then flag any that look at risk.\n\n---\n${e}` },
+  ];
+  const run = async (a) => {
+    if (!emailText.trim() || loading) return;
+    setActiveAction(a.id); setLoading(true); setOutput("");
+    try { setOutput(await callClaude({ prompt: a.prompt(emailText), apiKey, model })); }
+    catch (e) { setOutput("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Email Intelligence</div>
+        <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Paste any thread. Get executive-ready output.</h1>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Panel title="Source Email">
+          <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={14}
+            style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
+          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+            {actions.map(a => (
+              <Btn key={a.id} icon={a.icon} onClick={() => run(a)} disabled={!emailText.trim()} loading={loading && activeAction === a.id} full>{a.label}</Btn>
+            ))}
+          </div>
+        </Panel>
+        <Panel title="Output" accent={T.brass} action={output && (
+          <button onClick={() => navigator.clipboard?.writeText(output)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
+        )}>
+          {loading ? (
+            <div style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 12, display: "flex", alignItems: "center", gap: 8, padding: "40px 0", justifyContent: "center" }}>
+              <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={14} /></span>Processing...
+            </div>
+          ) : output ? (
+            <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{output}</div>
+          ) : (
+            <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", padding: "40px 0", letterSpacing: 1 }}>PASTE EMAIL + PICK AN ACTION</div>
+          )}
+        </Panel>
+      </div>
+    </div>
+  );
+};
+
+// ---------- REPORTS ----------
+const ReportsView = ({ apiKey, model }) => {
+  const [type, setType] = useState("outage");
+  const [context, setContext] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved] = useState(() => LS.get("saved_reports", []));
+  const templates = {
+    outage: { name:"Outage Report", sections:["Executive Summary","Timeline","Impact","Root Cause","Corrective Actions","Owner"] },
+    incident: { name:"Incident Report", sections:["Incident Summary","Sequence of Events","Affected Systems","Response","Lessons Learned"] },
+    rca: { name:"Root Cause Analysis", sections:["Problem Statement","Investigation Method","Findings","Root Cause","Corrective Actions"] },
+    pm: { name:"PM Compliance Report", sections:["Period","Site Breakdown","Variance Analysis","Exceptions","Recommendations"] },
+    vendor: { name:"Vendor Performance", sections:["Vendor","Scope","Performance vs SLA","Issues","Recommendation"] },
+    weekly: { name:"Weekly Executive Summary", sections:["This Week","Wins","Risks & Blockers","Next Week","Decisions Needed"] },
+  };
+  const generate = async () => {
+    if (!context.trim() || loading) return;
+    setLoading(true); setOutput("");
+    const tmpl = templates[type];
+    const prompt = `Generate a polished executive ${tmpl.name} for Twiney's MedStar portfolio. Use these sections in this order:\n\n${tmpl.sections.map((s, i) => (i + 1) + ". " + s).join("\n")}\n\nCONTEXT FROM TWINEY:\n${context}\n\nWrite in plain executive prose. Each section gets a short header in CAPS followed by the body. No bullets unless the data demands a list. Be concrete. If you don't have specifics, leave a clearly marked [TBD: specific item] placeholder rather than fabricating.`;
+    try { setOutput(await callClaude({ prompt, apiKey, model })); }
+    catch (e) { setOutput("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+  const save = () => {
+    if (!output) return;
+    const item = { id: Date.now(), type, name: templates[type].name, context: context.slice(0, 100), output, ts: Date.now() };
+    const next = [item, ...saved].slice(0, 20);
+    setSaved(next); LS.set("saved_reports", next);
+  };
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Executive Report Drafter</div>
+        <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>From context to leadership-ready in under a minute.</h1>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Panel title="Report Type">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {Object.entries(templates).map(([k, v]) => (
+                <button key={k} onClick={() => setType(k)}
+                  style={{ background: type === k ? T.brass + "15" : T.bgSunken, border: "1px solid " + (type === k ? T.brass : T.border), color: type === k ? T.brass : T.text, fontFamily: FF.body, fontSize: 12, padding: "10px 12px", cursor: "pointer", borderRadius: 2, textAlign: "left", fontWeight: type === k ? 500 : 400 }}>
+                  {v.name}
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 14, fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 1.2 }}>SECTIONS</div>
+            <div style={{ marginTop: 6, fontFamily: FF.body, fontSize: 12, color: T.textDim, lineHeight: 1.7 }}>{templates[type].sections.join(" · ")}</div>
+          </Panel>
+          <Panel title="Context">
+            <textarea value={context} onChange={e => setContext(e.target.value)} placeholder="Drop in raw notes, dates, names, vendor mentions, what happened, who's involved. EXEC-OS will structure it." rows={8}
+              style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
+            <div style={{ marginTop: 12 }}>
+              <Btn icon="spark" variant="primary" onClick={generate} loading={loading} full>Generate {templates[type].name}</Btn>
+            </div>
+          </Panel>
+          {saved.length > 0 && (
+            <Panel title={"Saved Reports — " + saved.length}>
+              <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                {saved.map(s => (
+                  <div key={s.id} onClick={() => { setType(s.type); setContext(s.context); setOutput(s.output); }}
+                    style={{ padding: "8px 0", borderBottom: "1px solid " + T.border, cursor: "pointer" }}>
+                    <div style={{ fontFamily: FF.body, fontSize: 12, color: T.text }}>{s.name}</div>
+                    <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, marginTop: 2 }}>{new Date(s.ts).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+        </div>
+        <Panel title="Draft" accent={T.brass} action={output && (
+          <div style={{ display: "flex", gap: 12 }}>
+            <button onClick={() => navigator.clipboard?.writeText(output)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
+            <button onClick={save} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>SAVE</button>
+          </div>
+        )}>
+          {loading ? (
+            <div style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 12, display: "flex", alignItems: "center", gap: 8, padding: "60px 0", justifyContent: "center" }}>
+              <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={14} /></span>Drafting {templates[type].name}...
+            </div>
+          ) : output ? (
+            <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>{output}</div>
+          ) : (
+            <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", padding: "80px 0", letterSpacing: 1 }}>SELECT TYPE + ADD CONTEXT + GENERATE</div>
+          )}
+        </Panel>
+      </div>
+    </div>
+  );
+};
+
+// ---------- SETTINGS MODAL ----------
+const Settings = ({ open, onClose, apiKey, setApiKey, model, setModel }) => {
+  const [tab, setTab] = useState("ai");
+  const [draft, setDraft] = useState(apiKey || "");
+  // Cloud config drafts
+  const initialCfg = LS.get("supabase_config", { url: "", anonKey: "", workspaceKey: "" });
+  const [cfgUrl, setCfgUrl] = useState(initialCfg.url || "");
+  const [cfgAnon, setCfgAnon] = useState(initialCfg.anonKey || "");
+  const [cfgWorkspace, setCfgWorkspace] = useState(initialCfg.workspaceKey || "");
+  const [testState, setTestState] = useState({ state: "idle", msg: "" });
+  useEffect(() => {
+    setDraft(apiKey || "");
+    const cfg = LS.get("supabase_config", { url: "", anonKey: "", workspaceKey: "" });
+    setCfgUrl(cfg.url || ""); setCfgAnon(cfg.anonKey || ""); setCfgWorkspace(cfg.workspaceKey || "");
+  }, [apiKey, open]);
+  if (!open) return null;
+
+  const saveApi = () => { setApiKey(draft.trim()); LS.set("api_key", draft.trim()); onClose(); };
+
+  const testCloud = async () => {
+    setTestState({ state: "testing", msg: "" });
+    Cloud.url = cfgUrl.replace(/\/$/, ""); Cloud.anonKey = cfgAnon;
+    try {
+      await Cloud.testConnection();
+      setTestState({ state: "ok", msg: "Connection successful." });
+    } catch (e) {
+      setTestState({ state: "fail", msg: e.message });
+    }
+  };
+  const saveCloud = async () => {
+    const u = cfgUrl.trim(), a = cfgAnon.trim(), w = cfgWorkspace.trim();
+    if (!u || !a || !w) { setTestState({ state: "fail", msg: "All three fields required." }); return; }
+    Cloud.configure({ url: u, anonKey: a, workspaceKey: w });
+    setTestState({ state: "testing", msg: "Pulling cloud data..." });
+    try {
+      const { merged } = await Cloud.pullAll();
+      setTestState({ state: "ok", msg: "Connected. " + merged + " items pulled from cloud." });
+      setTimeout(() => location.reload(), 1200);
+    } catch (e) {
+      setTestState({ state: "fail", msg: "Connected but pull failed: " + e.message });
+    }
+  };
+  const disconnectCloud = () => {
+    if (!confirm("Disconnect from cloud? Your local data stays; future writes won't sync until you reconnect.")) return;
+    Cloud.disable();
+    setCfgUrl(""); setCfgAnon(""); setCfgWorkspace("");
+    setTestState({ state: "idle", msg: "Disconnected." });
+  };
+
+  const tabBtn = (id, label) => (
+    <button onClick={() => setTab(id)}
+      style={{ background: tab === id ? T.surface : "transparent", border: "none", borderBottom: tab === id ? "2px solid " + T.brass : "2px solid transparent", color: tab === id ? T.text : T.textDim, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4, padding: "12px 18px", cursor: "pointer", textTransform: "uppercase" }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 620, background: T.bgRaised, border: "1px solid " + T.borderBright, borderRadius: 4, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.6)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid " + T.border, background: T.bgSunken, display: "flex", alignItems: "center", gap: 10 }}>
+          <Icon name="cog" size={16} color={T.brass} />
+          <div style={{ fontFamily: FF.mono, fontSize: 11, letterSpacing: 2, color: T.text, textTransform: "uppercase" }}>Settings</div>
+        </div>
+        <div style={{ display: "flex", borderBottom: "1px solid " + T.border, background: T.bgSunken }}>
+          {tabBtn("ai", "AI / Model")}
+          {tabBtn("cloud", "Cloud Sync")}
+        </div>
+        <div style={{ padding: 22, overflowY: "auto" }}>
+          {tab === "ai" && (
+            <div>
+              <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 8 }}>Anthropic API Key</div>
+              <input type="password" value={draft} onChange={e => setDraft(e.target.value)} placeholder="sk-ant-..."
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 12px", borderRadius: 2 }} />
+              <div style={{ fontFamily: FF.body, fontSize: 11, color: T.textFaint, marginTop: 8, lineHeight: 1.5 }}>
+                Stored only in this browser. Never synced to cloud. Get yours at console.anthropic.com.
+              </div>
+              <div style={{ marginTop: 20, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 8 }}>Model</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                {[
+                  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+                  { id: "claude-opus-4-7", label: "Opus 4.7" },
+                  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+                ].map(m => (
+                  <button key={m.id} onClick={() => { setModel(m.id); LS.set("model", m.id); }}
+                    style={{ background: model === m.id ? T.brass + "15" : T.bgSunken, border: "1px solid " + (model === m.id ? T.brass : T.border), color: model === m.id ? T.brass : T.text, fontFamily: FF.mono, fontSize: 10, padding: "8px", cursor: "pointer", borderRadius: 2, letterSpacing: 1 }}>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <Btn variant="danger" icon="trash" onClick={() => {
+                  if (confirm("Clear ALL local data (key, history, saved reports, cloud config)? This does NOT delete cloud data.")) {
+                    Object.keys(localStorage).filter(k => k.startsWith("execos:")).forEach(k => localStorage.removeItem(k));
+                    location.reload();
+                  }
+                }}>Wipe local</Btn>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn onClick={onClose}>Cancel</Btn>
+                  <Btn variant="primary" icon="key" onClick={saveApi}>Save</Btn>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "cloud" && (
+            <div>
+              <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.textDim, marginBottom: 16, lineHeight: 1.55 }}>
+                Cross-device sync. Memory, Notes, To-Do, terminal history, and reports sync between every browser you log in from. API key and model preference stay local for security.
+              </div>
+
+              <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 6 }}>Supabase Project URL</div>
+              <input value={cfgUrl} onChange={e => setCfgUrl(e.target.value)} placeholder="https://xxxxx.supabase.co"
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 12px", borderRadius: 2 }} />
+
+              <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 6, marginTop: 14 }}>Anon Public Key</div>
+              <input type="password" value={cfgAnon} onChange={e => setCfgAnon(e.target.value)} placeholder="eyJhbGciOi..."
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 12px", borderRadius: 2 }} />
+
+              <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 6, marginTop: 14 }}>Workspace Key (Your Secret)</div>
+              <input type="password" value={cfgWorkspace} onChange={e => setCfgWorkspace(e.target.value)} placeholder="A long random string only you know"
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 12px", borderRadius: 2 }} />
+              <div style={{ fontFamily: FF.body, fontSize: 11, color: T.textFaint, marginTop: 6, lineHeight: 1.5 }}>
+                This is your data password. Use the SAME key on every device. Use 32+ random characters. Anyone with this key can read your synced data, so treat it like a password.
+              </div>
+
+              {testState.state !== "idle" && (
+                <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 2, fontFamily: FF.mono, fontSize: 11, lineHeight: 1.5,
+                  background: testState.state === "ok" ? T.green + "15" : testState.state === "fail" ? T.red + "15" : T.cyan + "15",
+                  border: "1px solid " + (testState.state === "ok" ? T.green + "55" : testState.state === "fail" ? T.red + "55" : T.cyan + "55"),
+                  color: testState.state === "ok" ? T.green : testState.state === "fail" ? T.red : T.cyan }}>
+                  {testState.state === "testing" ? "Testing..." : testState.msg}
+                </div>
+              )}
+
+              <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                {Cloud.enabled ? (
+                  <Btn variant="danger" icon="trash" onClick={disconnectCloud}>Disconnect</Btn>
+                ) : <div />}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn onClick={testCloud} disabled={!cfgUrl || !cfgAnon}>Test Connection</Btn>
+                  <Btn variant="primary" icon="check" onClick={saveCloud}>Connect & Sync</Btn>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------- COMMAND PALETTE ----------
+const Palette = ({ open, onClose, onJump }) => {
+  const [q, setQ] = useState("");
+  useEffect(() => { if (open) setQ(""); }, [open]);
+  const items = [
+    { id: "dashboard", label: "Go to Dashboard", icon: "dash" },
+    { id: "terminal", label: "Open AI Terminal", icon: "term" },
+    { id: "sites", label: "Portfolio Sites", icon: "hex" },
+    { id: "focus", label: "Open Focus OS", icon: "brain" },
+    { id: "email", label: "Email Intelligence", icon: "mail" },
+    { id: "reports", label: "Report Drafter", icon: "file" },
+    { id: "memory", label: "Long-Term Memory", icon: "brain" },
+    { id: "notes", label: "Notes & Documents", icon: "file" },
+    { id: "audit", label: "Audit Log", icon: "list" },
+    { id: "theme", label: "Theme Editor", icon: "spark" },
+    { id: "help", label: "Help & Guide", icon: "key" },
+  ];
+  const filtered = q ? items.filter(i => i.label.toLowerCase().includes(q.toLowerCase())) : items;
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", zIndex: 100, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 120 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 520, background: T.bgRaised, border: "1px solid " + T.borderBright, borderRadius: 4, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid " + T.border }}>
+          <Icon name="search" size={14} color={T.textDim} />
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)}
+            onKeyDown={e => { if (e.key === "Escape") onClose(); if (e.key === "Enter" && filtered[0]) { onJump(filtered[0].id); onClose(); } }}
+            placeholder="Jump to..." style={{ flex: 1, background: "transparent", border: "none", color: T.text, fontFamily: FF.body, fontSize: 14 }} />
+          <span style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 1 }}>ESC</span>
+        </div>
+        <div style={{ padding: 8 }}>
+          {filtered.map(it => (
+            <button key={it.id} onClick={() => { onJump(it.id); onClose(); }}
+              style={{ width: "100%", background: "transparent", border: "none", color: T.text, fontFamily: FF.body, fontSize: 13, padding: "10px 12px", display: "flex", alignItems: "center", gap: 11, cursor: "pointer", borderRadius: 2, textAlign: "left" }}
+              onMouseEnter={e => e.currentTarget.style.background = T.surface}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <Icon name={it.icon} size={14} color={T.textDim} />{it.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------- VOICE / CONVERSATION ENGINE ----------
+// Two layers:
+//   - Voice (low-level): wraps SpeechRecognition + speechSynthesis APIs
+//   - Convo (high-level): runs the conversation loop with silence detection,
+//     auto-restart, and interrupt handling.
+const Voice = {
+  rec: null,
+  startedAt: 0,
+
+  start({ onPartial, onFinal, onError, onEnd }) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      alert("Voice not supported. Use Chrome, Edge, or Safari.");
+      return false;
+    }
+    this.stop();
+    const rec = new SR();
+    rec.continuous = true;        // keep listening even with pauses
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.maxAlternatives = 1;
+    let finalText = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      let gotFinal = false;
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) { finalText += r[0].transcript; gotFinal = true; }
+        else interim += r[0].transcript;
+      }
+      if (onPartial) onPartial(finalText + interim);
+      if (gotFinal && onFinal) onFinal(finalText);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      if (onError) onError(e.error);
+    };
+    rec.onend = () => {
+      this.rec = null;
+      if (onEnd) onEnd(finalText);
+    };
+    try {
+      rec.start();
+      this.rec = rec;
+      this.startedAt = Date.now();
+      return true;
+    } catch (err) {
+      // Some browsers throw if start() called too quickly after stop()
+      console.warn("Voice start failed:", err);
+      return false;
+    }
+  },
+
+  stop() {
+    if (this.rec) {
+      try { this.rec.stop(); } catch {}
+      this.rec = null;
+    }
+  },
+
+  // TTS — accept onStart and onEnd so caller can sync UI
+  speak(text, { onStart, onEnd } = {}) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    // Pick a natural-sounding voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => /Google US English|Samantha|Microsoft Aria|Microsoft Guy/i.test(v.name))
+                   || voices.find(v => v.lang === "en-US" && !v.localService)
+                   || voices.find(v => v.lang === "en-US");
+    const u = new SpeechSynthesisUtterance(text);
+    if (preferred) u.voice = preferred;
+    u.rate = 1.05;
+    u.pitch = 1.0;
+    u.volume = 1.0;
+    if (onStart) u.onstart = onStart;
+    if (onEnd) u.onend = onEnd;
+    u.onerror = onEnd; // treat error as end so loop continues
+    window.speechSynthesis.speak(u);
+  },
+
+  stopSpeaking() {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  },
+
+  isSpeaking() {
+    return window.speechSynthesis ? window.speechSynthesis.speaking : false;
+  },
+};
+
+// Conversation engine — runs the whole hands-free loop.
+// States: idle | listening | thinking | speaking
+const Convo = {
+  state: "idle",
+  active: false,             // master toggle
+  silenceTimer: null,
+  silenceMs: 1400,           // how long to wait after last speech before submitting
+  lastTranscript: "",
+  callbacks: {},
+
+  setCallbacks(cb) { this.callbacks = cb; },
+
+  setState(s) {
+    this.state = s;
+    if (this.callbacks.onState) this.callbacks.onState(s);
+  },
+
+  // Begin hands-free conversation mode
+  start() {
+    this.active = true;
+    this.beginListening();
+  },
+
+  // End hands-free mode entirely
+  stop() {
+    this.active = false;
+    this.clearSilence();
+    Voice.stop();
+    Voice.stopSpeaking();
+    this.setState("idle");
+  },
+
+  // User tapped to interrupt mid-conversation
+  interrupt() {
+    if (this.state === "speaking") {
+      Voice.stopSpeaking();
+      if (this.active) this.beginListening();
+      else this.setState("idle");
+    } else if (this.state === "listening") {
+      // Manual stop — submit whatever we have
+      this.submitCurrent();
+    }
+  },
+
+  beginListening() {
+    if (!this.active) return;
+    this.lastTranscript = "";
+    this.clearSilence();
+    this.setState("listening");
+    Voice.start({
+      onPartial: (t) => {
+        this.lastTranscript = t;
+        if (this.callbacks.onPartial) this.callbacks.onPartial(t);
+        // Each time speech is detected, restart the silence timer
+        this.scheduleSilenceSubmit();
+      },
+      onFinal: (t) => {
+        // Final chunk arrived — let silence timer keep running in case more speech comes
+        this.lastTranscript = t;
+        if (this.callbacks.onPartial) this.callbacks.onPartial(t);
+        this.scheduleSilenceSubmit();
+      },
+      onError: (err) => {
+        // Most errors mean we should just restart
+        if (this.active && this.state === "listening") {
+          setTimeout(() => { if (this.active && this.state === "listening") this.beginListening(); }, 300);
+        }
+      },
+      onEnd: () => {
+        // Recognition ended (either we stopped it or browser timed out)
+        // If we still have an unsent transcript and we're active, submit it
+        if (this.active && this.state === "listening") {
+          const text = this.lastTranscript.trim();
+          if (text) this.submitTranscript(text);
+          else {
+            // Restart listening
+            setTimeout(() => { if (this.active && this.state === "listening") this.beginListening(); }, 200);
+          }
+        }
+      },
+    });
+  },
+
+  scheduleSilenceSubmit() {
+    this.clearSilence();
+    this.silenceTimer = setTimeout(() => this.submitCurrent(), this.silenceMs);
+  },
+
+  clearSilence() {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  },
+
+  submitCurrent() {
+    this.clearSilence();
+    const text = this.lastTranscript.trim();
+    Voice.stop();
+    if (!text) {
+      // Nothing to send — restart listening if still active
+      if (this.active) setTimeout(() => { if (this.active) this.beginListening(); }, 200);
+      return;
+    }
+    this.submitTranscript(text);
+  },
+
+  submitTranscript(text) {
+    this.setState("thinking");
+    this.lastTranscript = "";
+    if (this.callbacks.onSubmit) this.callbacks.onSubmit(text);
+  },
+
+  // Called by Terminal once it has Claude's reply
+  speakReply(text) {
+    if (!text) {
+      if (this.active) this.beginListening();
+      else this.setState("idle");
+      return;
+    }
+    this.setState("speaking");
+    Voice.speak(text, {
+      onEnd: () => {
+        if (this.active) {
+          // small delay so the user doesn't hear their own breath in the mic
+          setTimeout(() => { if (this.active) this.beginListening(); }, 250);
+        } else {
+          this.setState("idle");
+        }
+      },
+    });
+  },
+
+  // Called by Terminal if Claude failed
+  handleError() {
+    if (this.active) this.beginListening();
+    else this.setState("idle");
+  },
+};
+
+// Pre-load voices (Chrome lazy-loads them)
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+}
+
+// ---------- MEMORY VIEW ----------
+const MemoryView = () => {
+  const [memories, setMemories] = useState(() => LS.get("memories", []));
+  const [draft, setDraft] = useState("");
+  const persist = (next) => { setMemories(next); LS.set("memories", next); };
+  const add = () => {
+    const t = draft.trim();
+    if (!t) return;
+    persist([{ id: Date.now(), text: t, pinned: false, createdAt: Date.now() }, ...memories]);
+    setDraft("");
+  };
+  const remove = (id) => persist(memories.filter(m => m.id !== id));
+  const togglePin = (id) => persist(memories.map(m => m.id === id ? { ...m, pinned: !m.pinned } : m));
+
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Long-Term Memory</div>
+        <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Things EXEC-OS will remember.</h1>
+        <div style={{ fontFamily: FF.body, fontSize: 13, color: T.textDim, marginTop: 6, lineHeight: 1.5, maxWidth: 720 }}>
+          Anything here gets injected into every conversation as context. Use it for facts you don't want to repeat: vendor preferences, naming conventions, recurring contacts, project context, your writing style.
+        </div>
+      </div>
+
+      <Panel title="Add Memory">
+        <textarea value={draft} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add(); }}
+          placeholder="e.g. When drafting to Chris Castle, always lead with operational risk before context."
+          rows={3}
+          style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13.5, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.5 }} />
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+          <Btn icon="check" variant="primary" onClick={add} disabled={!draft.trim()}>Remember</Btn>
+        </div>
+      </Panel>
+
+      <div style={{ marginTop: 16 }}>
+        <Panel title={"Stored Memories — " + memories.length}>
+          {memories.length === 0 ? (
+            <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: "30px 0", textAlign: "center", letterSpacing: 1.2 }}>NOTHING REMEMBERED YET</div>
+          ) : memories.map((m, i) => (
+            <div key={m.id} style={{ display: "flex", gap: 12, padding: "12px 0", borderBottom: i < memories.length - 1 ? "1px solid " + T.border : "none", alignItems: "flex-start" }}>
+              <button onClick={() => togglePin(m.id)} title={m.pinned ? "Unpin" : "Pin"}
+                style={{ background: "transparent", border: "none", color: m.pinned ? T.brass : T.textFaint, cursor: "pointer", padding: "2px 4px", fontSize: 14, lineHeight: 1 }}>
+                {m.pinned ? "★" : "☆"}
+              </button>
+              <div style={{ flex: 1, fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.text}</div>
+              <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 0.6, marginTop: 2 }}>
+                {new Date(m.createdAt).toLocaleDateString()}
+              </div>
+              <button onClick={() => remove(m.id)} title="Delete"
+                style={{ background: "transparent", border: "none", color: T.textFaint, cursor: "pointer", padding: "0 4px", fontSize: 16, lineHeight: 1 }}
+                onMouseEnter={e => e.currentTarget.style.color = T.red}
+                onMouseLeave={e => e.currentTarget.style.color = T.textFaint}>
+                ×
+              </button>
+            </div>
+          ))}
+        </Panel>
+      </div>
+    </div>
+  );
+};
+
+// ---------- NOTES VIEW (documents & reference material) ----------
+const NotesView = () => {
+  const [notes, setNotes] = useState(() => LS.get("notes", []));
+  const [active, setActive] = useState(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [query, setQuery] = useState("");
+  const [adding, setAdding] = useState(false);
+  const persist = (next) => { setNotes(next); LS.set("notes", next); };
+
+  const add = () => {
+    const t = draftTitle.trim() || "Untitled";
+    const b = draftBody.trim();
+    if (!b) return;
+    const note = { id: Date.now(), title: t, body: b, pinned: false, createdAt: Date.now() };
+    persist([note, ...notes]);
+    setDraftTitle(""); setDraftBody(""); setAdding(false); setActive(note);
+  };
+  const remove = (id) => { persist(notes.filter(n => n.id !== id)); if (active && active.id === id) setActive(null); };
+  const togglePin = (id) => persist(notes.map(n => n.id === id ? { ...n, pinned: !n.pinned } : n));
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { alert("File too large. 2MB max for plain text. For PDFs, use copy/paste instead."); return; }
+    const text = await file.text();
+    setDraftTitle(file.name);
+    setDraftBody(text);
+    setAdding(true);
+  };
+
+  const filtered = query.trim()
+    ? notes.filter(n => (n.title + " " + n.body).toLowerCase().includes(query.toLowerCase()))
+    : notes;
+
+  return (
+    <div style={{ padding: 22, height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Notes & Documents</div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Reference material EXEC-OS can read.</h1>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <label style={{ background: "transparent", border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", padding: "9px 14px", cursor: "pointer", borderRadius: 2, display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <Icon name="file" size={12} />UPLOAD .TXT/.MD
+            <input type="file" accept=".txt,.md,.markdown" style={{ display: "none" }}
+              onChange={e => handleFile(e.target.files?.[0])} />
+          </label>
+          <Btn icon="check" variant="primary" onClick={() => setAdding(true)}>New Note</Btn>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search notes..."
+          style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "10px 14px", borderRadius: 2 }} />
+      </div>
+
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "300px 1fr", gap: 14, minHeight: 0 }}>
+        <Panel title={"Notes — " + filtered.length}>
+          {filtered.length === 0 ? (
+            <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, padding: "30px 0", textAlign: "center", letterSpacing: 1 }}>{query ? "NO MATCHES" : "NO NOTES YET"}</div>
+          ) : (
+            <div style={{ maxHeight: 500, overflowY: "auto" }}>
+              {filtered.map(n => (
+                <div key={n.id} onClick={() => setActive(n)}
+                  style={{ padding: "10px 0", borderBottom: "1px solid " + T.border, cursor: "pointer", background: active && active.id === n.id ? T.surface : "transparent" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {n.pinned && <span style={{ color: T.brass, fontSize: 12 }}>★</span>}
+                    <div style={{ fontFamily: FF.body, fontSize: 13, color: T.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{n.title}</div>
+                  </div>
+                  <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, marginTop: 2 }}>{new Date(n.createdAt).toLocaleDateString()} · {n.body.length} chars</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title={adding ? "New Note" : (active ? active.title : "Preview")}
+          action={active && !adding && (
+            <div style={{ display: "flex", gap: 12 }}>
+              <button onClick={() => togglePin(active.id)} style={{ background: "transparent", border: "none", color: active.pinned ? T.brass : T.textDim, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>
+                {active.pinned ? "★ PINNED (USED AS CONTEXT)" : "☆ PIN"}
+              </button>
+              <button onClick={() => remove(active.id)} style={{ background: "transparent", border: "none", color: T.red, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>DELETE</button>
+            </div>
+          )}>
+          {adding ? (
+            <div>
+              <input value={draftTitle} onChange={e => setDraftTitle(e.target.value)} placeholder="Title"
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 14, padding: "10px 12px", borderRadius: 2, marginBottom: 10 }} />
+              <textarea value={draftBody} onChange={e => setDraftBody(e.target.value)} placeholder="Paste a report, an email thread, meeting notes, vendor info..."
+                rows={16}
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
+              <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <Btn onClick={() => { setAdding(false); setDraftBody(""); setDraftTitle(""); }} size="sm">Cancel</Btn>
+                <Btn variant="primary" icon="check" onClick={add} size="sm" disabled={!draftBody.trim()}>Save</Btn>
+              </div>
+            </div>
+          ) : active ? (
+            <div style={{ maxHeight: 520, overflowY: "auto", fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{active.body}</div>
+          ) : (
+            <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: "60px 0", textAlign: "center", letterSpacing: 1 }}>SELECT A NOTE OR CREATE ONE</div>
+          )}
+        </Panel>
+      </div>
+    </div>
+  );
+};
+
+// ---------- SITES MODEL ----------
+const SITE_CODES = ["MWHC", "MGUH", "MMMC", "MUMH", "MHH", "MGSH", "MSMHC", "MSMH", "MNRH", "MFSHC"];
+const SITE_NAMES = {
+  MWHC: "MedStar Washington Hospital Center",
+  MGUH: "MedStar Georgetown University Hospital",
+  MMMC: "MedStar Montgomery Medical Center",
+  MUMH: "MedStar Union Memorial Hospital",
+  MHH: "MedStar Harbor Hospital",
+  MGSH: "MedStar Good Samaritan Hospital",
+  MSMHC: "MedStar Southern Maryland Hospital Center",
+  MSMH: "MedStar St. Mary's Hospital",
+  MNRH: "MedStar National Rehabilitation Hospital",
+  MFSHC: "MedStar Franklin Square Medical Center",
+};
+const EMPTY_SITE = (code) => ({
+  code,
+  name: SITE_NAMES[code] || "",
+  location: "",
+  director: "",
+  status: "ok", // ok | watch | alert
+  equipment: {
+    boilers: "", chillers: "", coolingTowers: "", airHandlers: "",
+    generators: "", firePumps: "", medAirCompressors: "", vacuumPumps: "",
+    upsSystems: "", heatExchangers: "",
+  },
+  vendors: {
+    boilerPrimary: "", boilerBackup: "",
+    chillerPrimary: "", chillerBackup: "",
+    coolingTower: "", refrigerantMonitor: "",
+    compressedAir: "", hvacGeneral: "",
+    electrician: "", plumber: "",
+    controlsBAS: "", fireAlarm: "", fireSprinkler: "",
+    generator: "", medicalGas: "",
+    waterTreatment: "", domesticWaterLegionella: "",
+    saltSoftener: "", fuelOil: "", other: "",
+  },
+  bas: { vendor: "", platform: "", version: "", remoteAccess: "", lastPM: "" },
+  credentials: {
+    fireAlarmVendor: "", centralStationPasscode: "", vendorAccountNumber: "",
+    vendorLogin: "", vendorPassword: "",
+    monitoringCentralStation: "", centralStationAccount: "", centralStationPhone: "",
+    annualTestMonth: "", lastFullTestDate: "",
+  },
+  openItems: "",
+  notes: "",
+  updatedAt: 0,
+});
+
+function getOrInitSites() {
+  const stored = LS.get("sites", null);
+  if (stored && stored.length) return stored;
+  const seeded = SITE_CODES.map(EMPTY_SITE);
+  LS.set("sites", seeded);
+  return seeded;
+}
+
+function formatSiteForContext(s, includeCredentials = false) {
+  const lines = [];
+  lines.push(`## ${s.code} — ${s.name || "[name TBD]"}`);
+  if (s.location) lines.push(`Location: ${s.location}`);
+  if (s.director) lines.push(`Director: ${s.director}`);
+  lines.push(`Status: ${s.status?.toUpperCase() || "OK"}`);
+
+  const equipLines = Object.entries(s.equipment || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
+  if (equipLines.length) { lines.push("Equipment:"); lines.push(...equipLines); }
+
+  const vendorLines = Object.entries(s.vendors || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
+  if (vendorLines.length) { lines.push("Vendors:"); lines.push(...vendorLines); }
+
+  const basLines = Object.entries(s.bas || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
+  if (basLines.length) { lines.push("BAS:"); lines.push(...basLines); }
+
+  if (includeCredentials) {
+    const credLines = Object.entries(s.credentials || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
+    if (credLines.length) { lines.push("Credentials (sensitive):"); lines.push(...credLines); }
+  }
+
+  if (s.openItems) lines.push(`Open Items: ${s.openItems}`);
+  if (s.notes) lines.push(`Notes: ${s.notes}`);
+  return lines.join("\n");
+}
+
+function sitePercentComplete(s) {
+  let total = 0, filled = 0;
+  const sections = ["equipment", "vendors", "bas", "credentials"];
+  for (const sec of sections) {
+    const obj = s[sec] || {};
+    for (const k of Object.keys(obj)) { total++; if (obj[k] && obj[k] !== "") filled++; }
+  }
+  if (s.name) filled++; if (s.location) filled++; if (s.director) filled++;
+  total += 3;
+  return Math.round((filled / total) * 100);
+}
+
+const SITE_PARSER_PROMPT = `You are parsing a hospital site profile into structured JSON.
+
+Output ONLY a single valid JSON object with this exact shape — no commentary, no markdown, no code fences:
+
+{
+  "code": "MSMHC",
+  "name": "...",
+  "location": "...",
+  "director": "...",
+  "status": "ok",
+  "equipment": {
+    "boilers": "...", "chillers": "...", "coolingTowers": "...", "airHandlers": "",
+    "generators": "...", "firePumps": "...", "medAirCompressors": "...", "vacuumPumps": "...",
+    "upsSystems": "", "heatExchangers": "..."
+  },
+  "vendors": {
+    "boilerPrimary": "...", "boilerBackup": "...",
+    "chillerPrimary": "...", "chillerBackup": "...",
+    "coolingTower": "...", "refrigerantMonitor": "...",
+    "compressedAir": "...", "hvacGeneral": "...",
+    "electrician": "...", "plumber": "...",
+    "controlsBAS": "...", "fireAlarm": "...", "fireSprinkler": "...",
+    "generator": "...", "medicalGas": "...",
+    "waterTreatment": "...", "domesticWaterLegionella": "...",
+    "saltSoftener": "", "fuelOil": "...", "other": ""
+  },
+  "bas": { "vendor": "...", "platform": "...", "version": "...", "remoteAccess": "...", "lastPM": "..." },
+  "credentials": {
+    "fireAlarmVendor": "...", "centralStationPasscode": "...", "vendorAccountNumber": "",
+    "vendorLogin": "", "vendorPassword": "",
+    "monitoringCentralStation": "", "centralStationAccount": "", "centralStationPhone": "",
+    "annualTestMonth": "", "lastFullTestDate": ""
+  },
+  "openItems": "comma-separated list of fields the source says are missing or TBD",
+  "notes": ""
+}
+
+Rules:
+- For fields not present in the source, use an empty string "".
+- Preserve phone numbers and email addresses verbatim. Include vendor name AND phone in vendor fields like: "Emcor, 301-340-2290".
+- For "status" use "ok" unless the source explicitly flags problems — then "watch" or "alert".
+- "code" must be one of: MWHC, MGUH, MMMC, MUMH, MHH, MGSH, MSMHC, MSMH, MNRH, MFSHC. Infer from context.
+- NEVER invent vendors, phone numbers, or values not in the source. Empty string is correct when data is missing.
+
+PROFILE TEXT TO PARSE:
+
+`;
+
+// ---------- SITES VIEW ----------
+const SitesView = ({ apiKey, model }) => {
+  const [sites, setSites] = useState(() => getOrInitSites());
+  const [activeCode, setActiveCode] = useState(null);
+  const [showCreds, setShowCreds] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteError, setPasteError] = useState("");
+
+  const persist = (next) => { setSites(next); LS.set("sites", next); };
+  const updateActive = (mutator) => {
+    persist(sites.map(s => s.code === activeCode ? { ...mutator(s), updatedAt: Date.now() } : s));
+  };
+  const active = sites.find(s => s.code === activeCode);
+
+  const parseAndApply = async () => {
+    if (!pasteText.trim() || parsing) return;
+    setParsing(true); setPasteError("");
+    try {
+      const reply = await callClaude({
+        prompt: SITE_PARSER_PROMPT + pasteText,
+        apiKey, model, source: "sites-parser",
+        history: [],
+      });
+      // Extract JSON from reply (in case it wraps in code fences despite instructions)
+      let jsonStr = reply.trim();
+      const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]+?)```/);
+      if (fenceMatch) jsonStr = fenceMatch[1].trim();
+      // Find first { to last } in case there's any preamble
+      const firstBrace = jsonStr.indexOf("{");
+      const lastBrace = jsonStr.lastIndexOf("}");
+      if (firstBrace >= 0 && lastBrace > firstBrace) jsonStr = jsonStr.slice(firstBrace, lastBrace + 1);
+
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed.code || !SITE_CODES.includes(parsed.code)) {
+        throw new Error("Parser couldn't identify a valid site code. Got: " + (parsed.code || "(none)"));
+      }
+      // Merge parsed values into the existing empty site (preserve schema shape)
+      const existing = sites.find(s => s.code === parsed.code) || EMPTY_SITE(parsed.code);
+      const merged = {
+        ...existing,
+        ...parsed,
+        equipment: { ...existing.equipment, ...(parsed.equipment || {}) },
+        vendors: { ...existing.vendors, ...(parsed.vendors || {}) },
+        bas: { ...existing.bas, ...(parsed.bas || {}) },
+        credentials: { ...existing.credentials, ...(parsed.credentials || {}) },
+        updatedAt: Date.now(),
+      };
+      persist(sites.map(s => s.code === merged.code ? merged : s));
+      setActiveCode(merged.code);
+      setPasteOpen(false); setPasteText("");
+    } catch (e) {
+      setPasteError(e.message);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  if (active) {
+    return <SiteDetail site={active} onBack={() => setActiveCode(null)}
+      update={updateActive} showCreds={showCreds} setShowCreds={setShowCreds} />;
+  }
+
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Portfolio Sites</div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>10 hospitals. One operational picture.</h1>
+        </div>
+        <Btn icon="spark" variant="primary" onClick={() => setPasteOpen(true)}>Paste Profile Text</Btn>
+      </div>
+
+      {pasteOpen && (
+        <Panel title="Paste Profile — AI Parser" accent={T.cyan} action={
+          <button onClick={() => { setPasteOpen(false); setPasteText(""); setPasteError(""); }} style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>CANCEL</button>
+        }>
+          <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.textDim, marginBottom: 12, lineHeight: 1.5 }}>
+            Paste raw text from a director intake form, email, or document. EXEC-OS will parse it into the structured site fields. Review before saving — never trust AI parsing blindly on credentials or contact data.
+          </div>
+          <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
+            placeholder="Paste the entire site profile text here..."
+            rows={10}
+            style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.5 }} />
+          {pasteError && (
+            <div style={{ marginTop: 10, padding: "10px 14px", background: T.red + "15", border: "1px solid " + T.red + "55", color: T.red, fontFamily: FF.mono, fontSize: 11, borderRadius: 2 }}>
+              {pasteError}
+            </div>
+          )}
+          <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="primary" icon="zap" onClick={parseAndApply} loading={parsing} disabled={!pasteText.trim()}>Parse & Save</Btn>
+          </div>
+        </Panel>
+      )}
+
+      <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {sites.map(s => {
+          const pct = sitePercentComplete(s);
+          const statusColor = s.status === "alert" ? T.red : s.status === "watch" ? T.amber : T.green;
+          const populated = pct > 5;
+          return (
+            <button key={s.code} onClick={() => setActiveCode(s.code)}
+              style={{ background: T.bgRaised, border: "1px solid " + T.border, borderLeft: "3px solid " + statusColor, borderRadius: 3, padding: 16, textAlign: "left", cursor: "pointer", transition: "all 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = T.brass; e.currentTarget.style.borderLeftColor = statusColor; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.borderLeftColor = statusColor; }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div style={{ fontFamily: FF.mono, fontSize: 13, color: T.text, letterSpacing: 1.4, fontWeight: 600 }}>{s.code}</div>
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: statusColor, letterSpacing: 1.2 }}>{(s.status || "ok").toUpperCase()}</div>
+              </div>
+              <div style={{ fontFamily: FF.body, fontSize: 12, color: T.textDim, marginTop: 4, lineHeight: 1.4, minHeight: 32 }}>
+                {s.name || "[name TBD]"}
+              </div>
+              <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ flex: 1, height: 4, background: T.bgSunken, borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ width: pct + "%", height: "100%", background: populated ? T.brass : T.textFaint }} />
+                </div>
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textDim, letterSpacing: 0.6 }}>{pct}%</div>
+              </div>
+              {s.director && (
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, marginTop: 8, letterSpacing: 0.4 }}>
+                  Dir: {s.director}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ---------- SITE DETAIL VIEW ----------
+const SiteField = ({ label, value, onChange, mono = false, secret = false, type = "text" }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => { setDraft(value || ""); }, [value]);
+  const display = (value || "").trim();
+  const isEmpty = !display;
+  const inputType = secret && !editing ? "password" : type;
+
+  if (!editing) {
+    return (
+      <div onClick={() => setEditing(true)}
+        style={{ padding: "8px 10px", border: "1px solid " + T.border, background: T.bgSunken, borderRadius: 2, cursor: "pointer", minHeight: 36, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ flex: 1, fontFamily: mono ? FF.mono : FF.body, fontSize: 12.5, color: isEmpty ? T.textFaint : T.text, fontStyle: isEmpty ? "italic" : "normal", wordBreak: "break-word" }}>
+          {isEmpty ? "(empty — click to add)" : (secret ? "••••••••" : display)}
+        </div>
+        {isEmpty && <span style={{ fontFamily: FF.mono, fontSize: 8, color: T.amber, letterSpacing: 1, padding: "2px 5px", border: "1px solid " + T.amber + "44", borderRadius: 2 }}>TBD</span>}
+      </div>
+    );
+  }
+  return (
+    <input value={draft} autoFocus type={type === "textarea" ? "text" : type}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={() => { onChange(draft); setEditing(false); }}
+      onKeyDown={e => { if (e.key === "Enter") { onChange(draft); setEditing(false); } if (e.key === "Escape") { setDraft(value || ""); setEditing(false); } }}
+      style={{ width: "100%", background: T.surface, border: "1px solid " + T.brass, color: T.text, fontFamily: mono ? FF.mono : FF.body, fontSize: 12.5, padding: "7px 10px", borderRadius: 2, boxSizing: "border-box" }} />
+  );
+};
+
+const SiteFieldArea = ({ value, onChange }) => {
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => { setDraft(value || ""); }, [value]);
+  return (
+    <textarea value={draft} onChange={e => setDraft(e.target.value)}
+      onBlur={() => onChange(draft)}
+      placeholder="(empty — click to add)"
+      rows={3}
+      style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "10px 12px", borderRadius: 2, boxSizing: "border-box", resize: "vertical", lineHeight: 1.5 }} />
+  );
+};
+
+const SiteSection = ({ title, color, children, action }) => (
+  <div style={{ marginTop: 14 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.8, color: color || T.brass, textTransform: "uppercase" }}>{title}</div>
+      {action}
+    </div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+      {children}
+    </div>
+  </div>
+);
+
+const SiteRow = ({ label, children }) => (
+  <div>
+    <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textDim, letterSpacing: 0.8, marginBottom: 4, textTransform: "uppercase" }}>{label}</div>
+    {children}
+  </div>
+);
+
+const SiteDetail = ({ site, onBack, update, showCreds, setShowCreds }) => {
+  const setField = (path, value) => {
+    update(s => {
+      const next = { ...s };
+      const parts = path.split(".");
+      if (parts.length === 1) { next[parts[0]] = value; }
+      else if (parts.length === 2) { next[parts[0]] = { ...next[parts[0]], [parts[1]]: value }; }
+      return next;
+    });
+  };
+
+  const pct = sitePercentComplete(site);
+  const statusColor = site.status === "alert" ? T.red : site.status === "watch" ? T.amber : T.green;
+  const phoneOf = (str) => (str.match(/(\+?\d[\d\s\-().]{7,})/) || [])[1];
+
+  return (
+    <div style={{ padding: 22 }}>
+      <button onClick={onBack} style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.6, cursor: "pointer", padding: 0, marginBottom: 16 }}>
+        ← BACK TO PORTFOLIO
+      </button>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontFamily: FF.mono, fontSize: 14, color: T.brass, letterSpacing: 2, fontWeight: 600 }}>{site.code}</div>
+            <div style={{ fontFamily: FF.mono, fontSize: 10, color: statusColor, letterSpacing: 1.4, padding: "3px 8px", border: "1px solid " + statusColor + "55", borderRadius: 2 }}>{(site.status || "ok").toUpperCase()}</div>
+          </div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 30, fontWeight: 500, color: T.text, margin: "6px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>
+            {site.name || "[Hospital name TBD]"}
+          </h1>
+          <div style={{ marginTop: 12, display: "flex", gap: 24, alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 120, height: 5, background: T.bgSunken, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: pct + "%", height: "100%", background: T.brass }} />
+              </div>
+              <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textDim, letterSpacing: 0.6 }}>{pct}% COMPLETE</div>
+            </div>
+            {site.updatedAt > 0 && (
+              <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 0.5 }}>
+                Updated {new Date(site.updatedAt).toLocaleDateString()}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["ok", "watch", "alert"].map(st => (
+            <button key={st} onClick={() => setField("status", st)}
+              style={{ background: site.status === st ? (st === "alert" ? T.red : st === "watch" ? T.amber : T.green) + "20" : T.bgSunken,
+                border: "1px solid " + (site.status === st ? (st === "alert" ? T.red : st === "watch" ? T.amber : T.green) : T.border),
+                color: site.status === st ? (st === "alert" ? T.red : st === "watch" ? T.amber : T.green) : T.textDim,
+                fontFamily: FF.mono, fontSize: 9, padding: "5px 9px", cursor: "pointer", borderRadius: 2, letterSpacing: 1, textTransform: "uppercase" }}>
+              {st}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Panel title="Site Info">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+          <SiteRow label="Hospital Name"><SiteField value={site.name} onChange={v => setField("name", v)} /></SiteRow>
+          <SiteRow label="Location"><SiteField value={site.location} onChange={v => setField("location", v)} /></SiteRow>
+          <SiteRow label="Director"><SiteField value={site.director} onChange={v => setField("director", v)} /></SiteRow>
+        </div>
+      </Panel>
+
+      <SiteSection title="Equipment Counts">
+        {[
+          ["Boilers", "boilers"], ["Chillers", "chillers"], ["Cooling Towers", "coolingTowers"],
+          ["Air Handlers", "airHandlers"], ["Generators", "generators"], ["Fire Pumps", "firePumps"],
+          ["Medical Air Compressors", "medAirCompressors"], ["Vacuum Pumps", "vacuumPumps"],
+          ["UPS Systems", "upsSystems"], ["Heat Exchangers", "heatExchangers"],
+        ].map(([label, key]) => (
+          <SiteRow key={key} label={label}>
+            <SiteField value={site.equipment?.[key]} onChange={v => setField("equipment." + key, v)} mono />
+          </SiteRow>
+        ))}
+      </SiteSection>
+
+      <SiteSection title="Preferred Vendors">
+        {[
+          ["Boiler — Primary", "boilerPrimary"], ["Boiler — Backup", "boilerBackup"],
+          ["Chiller — Primary", "chillerPrimary"], ["Chiller — Backup", "chillerBackup"],
+          ["Cooling Tower", "coolingTower"], ["Refrigerant Monitor", "refrigerantMonitor"],
+          ["Compressed Air", "compressedAir"], ["HVAC General", "hvacGeneral"],
+          ["Electrician", "electrician"], ["Plumber", "plumber"],
+          ["Controls / BAS", "controlsBAS"], ["Fire Alarm", "fireAlarm"], ["Fire Sprinkler", "fireSprinkler"],
+          ["Generator", "generator"], ["Medical Gas", "medicalGas"],
+          ["Water Treatment", "waterTreatment"], ["Domestic Water / Legionella", "domesticWaterLegionella"],
+          ["Salt / Softener", "saltSoftener"], ["Fuel Oil", "fuelOil"], ["Other", "other"],
+        ].map(([label, key]) => {
+          const val = site.vendors?.[key] || "";
+          const phone = phoneOf(val);
+          return (
+            <SiteRow key={key} label={label}>
+              <SiteField value={val} onChange={v => setField("vendors." + key, v)} mono />
+              {phone && (
+                <a href={"tel:" + phone.replace(/[^\d+]/g, "")}
+                  style={{ display: "inline-block", marginTop: 4, fontFamily: FF.mono, fontSize: 9, color: T.cyan, letterSpacing: 0.8, textDecoration: "none" }}>
+                  📞 CALL {phone.trim()}
+                </a>
+              )}
+            </SiteRow>
+          );
+        })}
+      </SiteSection>
+
+      <SiteSection title="Building Automation System">
+        {[
+          ["BAS Vendor", "vendor"], ["Platform", "platform"], ["Version", "version"],
+          ["Remote Access", "remoteAccess"], ["Last PM / Update", "lastPM"],
+        ].map(([label, key]) => (
+          <SiteRow key={key} label={label}>
+            <SiteField value={site.bas?.[key]} onChange={v => setField("bas." + key, v)} mono />
+          </SiteRow>
+        ))}
+      </SiteSection>
+
+      <SiteSection title="Credentials (Sensitive)" color={T.red}
+        action={
+          <button onClick={() => setShowCreds(!showCreds)}
+            style={{ background: showCreds ? T.red + "15" : "transparent", border: "1px solid " + (showCreds ? T.red : T.border), color: showCreds ? T.red : T.textDim, fontFamily: FF.mono, fontSize: 9, padding: "4px 10px", cursor: "pointer", borderRadius: 2, letterSpacing: 1.2, textTransform: "uppercase" }}>
+            {showCreds ? "🔓 SHOWING" : "🔒 HIDDEN"}
+          </button>
+        }>
+        {[
+          ["Fire Alarm Vendor", "fireAlarmVendor", false],
+          ["Central Station Passcode", "centralStationPasscode", true],
+          ["Vendor Account Number", "vendorAccountNumber", true],
+          ["Vendor Login", "vendorLogin", true],
+          ["Vendor Password", "vendorPassword", true],
+          ["Monitoring Central Station", "monitoringCentralStation", false],
+          ["Central Station Account", "centralStationAccount", true],
+          ["Central Station Phone", "centralStationPhone", false],
+          ["Annual Test Month", "annualTestMonth", false],
+          ["Last Full Test Date", "lastFullTestDate", false],
+        ].map(([label, key, isSecret]) => (
+          <SiteRow key={key} label={label}>
+            <SiteField value={site.credentials?.[key]} onChange={v => setField("credentials." + key, v)}
+              mono secret={isSecret && !showCreds} />
+          </SiteRow>
+        ))}
+        <div style={{ gridColumn: "1 / -1", marginTop: 6, fontFamily: FF.body, fontSize: 11, color: T.textFaint, lineHeight: 1.5 }}>
+          Credentials are stored in cloud sync (encrypted in transit, protected by your workspace key). They are NOT sent to the AI by default. If you want Claude to use them for a specific task, you'll need to include them explicitly.
+        </div>
+      </SiteSection>
+
+      <SiteSection title="Open Items">
+        <div style={{ gridColumn: "1 / -1" }}>
+          <SiteFieldArea value={site.openItems} onChange={v => setField("openItems", v)} />
+        </div>
+      </SiteSection>
+
+      <SiteSection title="Notes">
+        <div style={{ gridColumn: "1 / -1" }}>
+          <SiteFieldArea value={site.notes} onChange={v => setField("notes", v)} />
+        </div>
+      </SiteSection>
+    </div>
+  );
+};
+
+// ---------- HELP / GUIDE VIEW ----------
+const HelpView = () => {
+  const [query, setQuery] = useState("");
+  const [openSection, setOpenSection] = useState(null);
+
+  const SECTIONS = [
+    {
+      id: "intro",
+      title: "What EXEC-OS Is",
+      icon: "spark",
+      tags: "overview start what intro",
+      body: (
+        <div>
+          <p>EXEC-OS is your personal command center. It pulls together your live priority tasks from Smartsheet, your portfolio sites, your AI terminal, and your operational memory into one place. Built specifically for the Director of Systems Maintenance workflow across the MedStar portfolio.</p>
+          <p style={{ marginTop: 12 }}>Everything you type or save here syncs to the cloud through Supabase. Open EXEC-OS on any device with the same workspace key and you see the same data instantly.</p>
+          <p style={{ marginTop: 12, color: T.brass }}>Top-right corner status bar quick reference:</p>
+          <ul>
+            <li><b style={{ color: T.green }}>SYNCED (green)</b> — cloud sync is working. Your data is safe across devices.</li>
+            <li><b style={{ color: T.brass }}>LOCAL ONLY</b> — cloud sync is off. Data only lives in this browser.</li>
+            <li><b style={{ color: T.green }}>API (green)</b> — your Anthropic API key is set, AI features work.</li>
+            <li><b style={{ color: T.red }}>NO KEY</b> — set your Anthropic API key in Settings (gear icon) before using Terminal, Email Intel, Reports, or Sites parser.</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      id: "dashboard",
+      title: "Dashboard — Priority Tasks",
+      icon: "dash",
+      tags: "dashboard tasks priority tom watson smartsheet",
+      body: (
+        <div>
+          <p>The Dashboard is your morning landing pad. It pulls your Priority Tasks tracker (Tom Watson's Smartsheet) and shows them inline — no separate login, no iframe.</p>
+          <p style={{ marginTop: 12 }}><b>What you can do here:</b></p>
+          <ul>
+            <li><b>Filter chips:</b> tap OPEN, HIGH PRIORITY, or ALL to slice your tasks. Site-specific chips appear automatically when tasks have a site code.</li>
+            <li><b>REFRESH:</b> manual pull from Smartsheet anytime. Auto-refreshes every 60 seconds otherwise.</li>
+            <li><b>CHANGE:</b> swap to a different Smartsheet endpoint URL.</li>
+            <li><b>BRIEF ME:</b> jumps you to the Terminal with full task context loaded — ask "What are my top 3 open priorities?"</li>
+            <li><b>To-Do list:</b> for things that don't belong in the team tracker. Personal scratch list.</li>
+            <li><b>Today panel:</b> your scheduled meetings (currently placeholder — calendar integration coming).</li>
+          </ul>
+          <p style={{ marginTop: 12, fontStyle: "italic", color: T.textDim }}>The Terminal automatically knows everything in your task list. Ask it "what's blocked at MWHC?" and it answers from real data, not guesses.</p>
+        </div>
+      ),
+    },
+    {
+      id: "terminal",
+      title: "Terminal — Talk to Claude",
+      icon: "term",
+      tags: "terminal ai claude chat brief voice",
+      body: (
+        <div>
+          <p>The Terminal is where you have a direct conversation with Claude. Every response is augmented with your live task data, site profiles, pinned notes, and memory.</p>
+          <p style={{ marginTop: 12 }}><b>What to ask:</b></p>
+          <ul>
+            <li>"Brief me on today's priorities. Group by site."</li>
+            <li>"Draft an email to Heather about the MWHC turnover checklist v2 status."</li>
+            <li>"What's the boiler service primary vendor at MSMHC and what's their phone number?"</li>
+            <li>"Summarize what Limbach owes us on Building X."</li>
+            <li>"Generate talking points for my 1:1 with Chris Castle."</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Voice mode:</b> click the <b>VOICE OFF</b> toggle top right to enable. Click the 🎙 mic button to dictate. Claude reads responses back to you. Useful in the car.</p>
+          <p style={{ marginTop: 12 }}><b>Clear history:</b> the CLEAR button wipes the current conversation. Memory and notes are not touched.</p>
+        </div>
+      ),
+    },
+    {
+      id: "sites",
+      title: "Sites — Portfolio Profiles",
+      icon: "hex",
+      tags: "sites hospitals vendors equipment bas credentials",
+      body: (
+        <div>
+          <p>Ten hospital cards, one for each MedStar site. Each card holds equipment counts, preferred vendors with phone numbers, BAS platform info, fire alarm credentials, and open items.</p>
+          <p style={{ marginTop: 12 }}><b>The fastest way to populate a site:</b></p>
+          <ol>
+            <li>Click <b>Paste Profile Text</b> (top right of Sites)</li>
+            <li>Paste raw text from a director intake form, email, or word doc</li>
+            <li>Click <b>Parse &amp; Save</b> — Claude pulls every field into structured form</li>
+            <li>Click into the saved site and review/correct anything</li>
+          </ol>
+          <p style={{ marginTop: 12 }}><b>Editing fields:</b> click any field. Type. Press Enter or click away. Saves and syncs automatically. No "edit mode" button.</p>
+          <p style={{ marginTop: 12 }}><b>Vendor phone numbers</b> are auto-detected and become tap-to-call links on your phone.</p>
+          <p style={{ marginTop: 12, color: T.red }}><b>Credentials section:</b> hidden by default. Click HIDDEN/SHOWING toggle to reveal. These values are NEVER sent to Claude unless you explicitly include them. They sync to your cloud, protected by your workspace key — treat that key like a password.</p>
+          <p style={{ marginTop: 12 }}>Mention a site code (MWHC, MGUH, etc.) in the Terminal and Claude auto-loads that full site profile for context. Ask cross-portfolio questions like "which sites use Nalco?" and Claude knows because all 10 sites are in light context.</p>
+        </div>
+      ),
+    },
+    {
+      id: "focus",
+      title: "Focus OS — Get Unstuck",
+      icon: "brain",
+      tags: "focus task paralysis dopamine body double quest",
+      body: (
+        <div>
+          <p>Six modules built for when you're stuck, scattered, or running on fumes:</p>
+          <ul>
+            <li><b>Task Paralysis Shatterer:</b> describe the thing you can't start. Claude breaks it into a 5-minute first step.</li>
+            <li><b>Dopamine Menu:</b> generate fast, non-destructive rewards for between hard tasks.</li>
+            <li><b>Body Double:</b> 30-minute focus session with Claude as your accountability partner.</li>
+            <li><b>Context Switch:</b> dump where you are now, get a clean handoff to the next thing.</li>
+            <li><b>Quest Mode:</b> gamify your day. Claude assigns XP and turns errands into a quest log.</li>
+            <li><b>Open Loop Dump:</b> when your brain has 12 tabs open. Brain-dump everything, Claude organizes.</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      id: "email",
+      title: "Email Intel — Process Threads",
+      icon: "mail",
+      tags: "email intel summarize draft firm escalate commitments",
+      body: (
+        <div>
+          <p>Paste any email thread (or just one email) and choose what to do with it. One click each.</p>
+          <p style={{ marginTop: 12 }}><b>Six actions:</b></p>
+          <ul>
+            <li><b>Summarize:</b> 3-line briefing — what they said, what they want, what you owe.</li>
+            <li><b>Draft Reply:</b> writes a response in your voice. Direct, technically precise, no fluff.</li>
+            <li><b>Firm Reply:</b> when a vendor's dragging. Holds the line.</li>
+            <li><b>Escalate:</b> drafts a notification up the chain (Heather, Chris, Nick).</li>
+            <li><b>Action List:</b> extracts everything action-able into a clean checklist.</li>
+            <li><b>Commitments:</b> who promised what, by when. Catches things buried in long threads.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.textDim, fontStyle: "italic" }}>Gmail/Outlook OAuth integration is on the roadmap — currently paste-driven.</p>
+        </div>
+      ),
+    },
+    {
+      id: "reports",
+      title: "Reports — Drafted in Your Voice",
+      icon: "file",
+      tags: "reports outage incident rca pm compliance vendor weekly",
+      body: (
+        <div>
+          <p>Six template types calibrated to your operational reality:</p>
+          <ul>
+            <li><b>Outage Report:</b> what failed, when, blast radius, root cause, next steps.</li>
+            <li><b>Incident:</b> people-safety, security, or compliance events.</li>
+            <li><b>RCA (Root Cause Analysis):</b> structured 5-whys with documented sequence.</li>
+            <li><b>PM Compliance:</b> for Joint Commission and Title V documentation.</li>
+            <li><b>Vendor Performance:</b> for review meetings or SLA escalations.</li>
+            <li><b>Weekly Recap:</b> for Heather or Chris. Brief, executive-tone, no bullets unless data demands it.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}>Each saved report goes into your Audit Log. Iterate in Terminal: "Make it shorter. Remove paragraph 3. Lead with financial impact."</p>
+        </div>
+      ),
+    },
+    {
+      id: "memory",
+      title: "Memory — Teach Claude About Your Work",
+      icon: "brain",
+      tags: "memory facts remember context",
+      body: (
+        <div>
+          <p>The single highest-leverage feature. Every memory you add gets injected into every Claude conversation, automatically.</p>
+          <p style={{ marginTop: 12 }}><b>Good memories to add:</b></p>
+          <ul>
+            <li>"Heather prefers brief turnover updates in plain prose, no bullets."</li>
+            <li>"When emailing Chris Castle, lead with operational risk before context."</li>
+            <li>"MGUH AHU-6 chilled water valve has been pinned at 100% open since [date]."</li>
+            <li>"Building X SSO dispute with Siemens — Jeff Pfarr is PM. Awaiting written policy from MedStar IT."</li>
+            <li>"My direct reports are [names]. My peers in Crothall ops are [names]."</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>To add:</b> type the fact, click Remember. <b>To pin to top:</b> click the ★ star. <b>To delete:</b> click ×.</p>
+          <p style={{ marginTop: 12, color: T.brass }}>Twenty good memories transforms Claude from search engine to chief of staff.</p>
+        </div>
+      ),
+    },
+    {
+      id: "notes",
+      title: "Notes — Pinned Reference Docs",
+      icon: "file",
+      tags: "notes documents pin context reference",
+      body: (
+        <div>
+          <p>Long-form reference material. Things like your turnover checklist, your PM compliance framework, vendor proposals, project scopes.</p>
+          <p style={{ marginTop: 12 }}><b>The ★ pin is powerful:</b> pinned notes get included in every Claude conversation as active context. Pin 3-5 most-referenced docs and Claude has them loaded by default.</p>
+          <p style={{ marginTop: 12 }}><b>Upload:</b> click Upload to drop .txt or .md files. <b>Search:</b> search bar searches both title and body.</p>
+        </div>
+      ),
+    },
+    {
+      id: "audit",
+      title: "Audit Log — Every AI Call",
+      icon: "list",
+      tags: "audit log history calls api timestamps",
+      body: (
+        <div>
+          <p>Every Claude API call gets logged here with timestamp, source module, prompt preview, response length, milliseconds, and status. Helpful for tracking what you've asked and when, and for verifying that your API credits are being used as expected.</p>
+          <p style={{ marginTop: 12 }}>Errors show in red. Click any row to see full details.</p>
+        </div>
+      ),
+    },
+    {
+      id: "theme",
+      title: "Theme — Customize Colors",
+      icon: "spark",
+      tags: "theme colors design appearance customize",
+      body: (
+        <div>
+          <p>Open the <b>Theme</b> tab in the sidebar to change colors. Click a preset for an instant swap, or customize individual colors:</p>
+          <ul>
+            <li><b>Brass</b> — primary accent (buttons, highlights)</li>
+            <li><b>Cyan</b> — secondary accent (in-progress states, info)</li>
+            <li><b>Red</b> — alerts and warnings</li>
+            <li><b>Green</b> — success states</li>
+            <li><b>Amber</b> — caution states</li>
+            <li><b>Background, surface, text</b> colors for the entire UI</li>
+          </ul>
+          <p style={{ marginTop: 12 }}>Theme syncs to cloud so your color choice follows you across devices. Click <b>Reset to Default</b> if you want to start over.</p>
+        </div>
+      ),
+    },
+    {
+      id: "cloud",
+      title: "Cloud Sync &amp; Workspace Key",
+      icon: "key",
+      tags: "cloud sync supabase workspace key cross device",
+      body: (
+        <div>
+          <p>Cloud Sync uses Supabase to store your data outside this browser. Same workspace key on every device = same data everywhere.</p>
+          <p style={{ marginTop: 12 }}><b>What syncs:</b> Memory, Notes, Sites, To-Do, Audit Log, Tasks API URL, Theme.</p>
+          <p style={{ marginTop: 12, color: T.red }}><b>What never syncs (stays local for security):</b> Anthropic API key, model preference, voice mode toggle.</p>
+          <p style={{ marginTop: 12, color: T.amber }}><b>Critical:</b> save your workspace key somewhere safe (password manager, notepad file). If you lose it, you lose access to your synced data — there is no recovery. Anyone with that key can read your synced data, so treat it like a password.</p>
+        </div>
+      ),
+    },
+    {
+      id: "shortcuts",
+      title: "Keyboard Shortcuts &amp; Tips",
+      icon: "term",
+      tags: "shortcuts keys hotkeys tips",
+      body: (
+        <div>
+          <ul>
+            <li><b>Ctrl + K</b> or click search bar — Open command palette, jump to any view</li>
+            <li><b>Enter</b> in terminal — Send message</li>
+            <li><b>Shift + Enter</b> in terminal — New line without sending</li>
+            <li><b>Escape</b> — Close any modal</li>
+            <li><b>Click any text field</b> in Sites — Edit inline. Press <b>Enter</b> to save or <b>Escape</b> to cancel.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.brass }}>Daily ritual: open EXEC-OS, click Brief Me, voice it back to you on the drive in. By the time you reach the parking garage, you know your day.</p>
+        </div>
+      ),
+    },
+  ];
+
+  const filtered = query
+    ? SECTIONS.filter(s => {
+        const q = query.toLowerCase();
+        return s.title.toLowerCase().includes(q) ||
+               s.tags.toLowerCase().includes(q) ||
+               (typeof s.body === "string" && s.body.toLowerCase().includes(q));
+      })
+    : SECTIONS;
+
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Help &amp; Guide</div>
+        <h1 style={{ fontFamily: FF.display, fontSize: 32, fontWeight: 500, color: T.text, margin: "6px 0 0", letterSpacing: -0.5, fontStyle: "italic" }}>How to use EXEC-OS</h1>
+        <div style={{ fontFamily: FF.body, fontSize: 13.5, color: T.textDim, marginTop: 10, lineHeight: 1.55, maxWidth: 720 }}>
+          Click any section to expand. Use search to find specific topics. Every feature is documented here — if you can't find it, ask Claude in the Terminal.
+        </div>
+      </div>
+
+      <input value={query} onChange={e => setQuery(e.target.value)}
+        placeholder="Search help topics (e.g. theme, memory, smartsheet)..."
+        style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "10px 14px", borderRadius: 2, marginBottom: 14, boxSizing: "border-box" }} />
+
+      <div>
+        {filtered.length === 0 ? (
+          <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: 40, textAlign: "center", letterSpacing: 1.2 }}>
+            NO TOPICS MATCH "{query.toUpperCase()}"
+          </div>
+        ) : filtered.map(s => {
+          const open = openSection === s.id || !!query;
+          return (
+            <div key={s.id} style={{ marginBottom: 8, background: T.bgRaised, border: "1px solid " + T.border, borderRadius: 3, overflow: "hidden" }}>
+              <button onClick={() => setOpenSection(open && !query ? null : s.id)}
+                style={{ width: "100%", background: "transparent", border: "none", padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, textAlign: "left" }}>
+                <Icon name={s.icon} size={14} color={T.brass} />
+                <div style={{ flex: 1, fontFamily: FF.display, fontSize: 16, color: T.text, fontStyle: "italic" }}>{s.title}</div>
+                <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint }}>{open ? "−" : "+"}</div>
+              </button>
+              {open && (
+                <div style={{ padding: "4px 18px 18px 44px", fontFamily: FF.body, fontSize: 13.5, color: T.textDim, lineHeight: 1.65 }}>
+                  {s.body}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ---------- THEME EDITOR VIEW ----------
+const ThemeView = () => {
+  const [overrides, setOverrides] = useState(() => LS.get("theme_overrides", {}));
+  const [, force] = useState(0);
+
+  const setColor = (key, value) => {
+    const next = { ...overrides, [key]: value };
+    setOverrides(next);
+    LS.set("theme_overrides", next);
+    applyTheme(next);
+    force(x => x + 1);
+  };
+
+  const applyPreset = (name) => {
+    const preset = THEME_PRESETS[name];
+    if (!preset) return;
+    // Strip out keys that match defaults to keep override map small
+    const diff = {};
+    for (const k of Object.keys(preset)) {
+      if (preset[k] !== T_DEFAULT[k]) diff[k] = preset[k];
+    }
+    setOverrides(diff);
+    LS.set("theme_overrides", diff);
+    applyTheme(diff);
+    force(x => x + 1);
+  };
+
+  const reset = () => {
+    if (!confirm("Reset all colors to default?")) return;
+    setOverrides({});
+    LS.set("theme_overrides", {});
+    applyTheme({});
+    force(x => x + 1);
+  };
+
+  const COLOR_GROUPS = [
+    {
+      title: "Accents",
+      desc: "Primary visual identity colors. Most prominent across the UI.",
+      keys: [
+        { key: "brass", label: "Brass — Primary accent" },
+        { key: "cyan", label: "Cyan — Info / In-progress" },
+        { key: "amber", label: "Amber — Caution" },
+        { key: "green", label: "Green — Success" },
+        { key: "red", label: "Red — Alert / Error" },
+      ]
+    },
+    {
+      title: "Backgrounds",
+      desc: "Three layers from deepest to brightest. Affects panels, cards, and modal surfaces.",
+      keys: [
+        { key: "bg", label: "Background — Main canvas" },
+        { key: "bgSunken", label: "Background sunken — Input boxes" },
+        { key: "bgRaised", label: "Background raised — Cards, panels" },
+        { key: "surface", label: "Surface — Active/hover states" },
+      ]
+    },
+    {
+      title: "Borders & Dividers",
+      desc: "Lines, separators, and focus rings.",
+      keys: [
+        { key: "border", label: "Border — Default lines" },
+        { key: "borderBright", label: "Border bright — Active focus" },
+      ]
+    },
+    {
+      title: "Text",
+      desc: "Three tiers of text contrast for hierarchy.",
+      keys: [
+        { key: "text", label: "Text — Primary content" },
+        { key: "textDim", label: "Text dim — Secondary content" },
+        { key: "textFaint", label: "Text faint — Hints, placeholders" },
+      ]
+    },
+  ];
+
+  return (
+    <div style={{ padding: 22, maxWidth: 880 }}>
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Theme</div>
+        <h1 style={{ fontFamily: FF.display, fontSize: 32, fontWeight: 500, color: T.text, margin: "6px 0 0", letterSpacing: -0.5, fontStyle: "italic" }}>Customize the look</h1>
+        <div style={{ fontFamily: FF.body, fontSize: 13.5, color: T.textDim, marginTop: 10, lineHeight: 1.55, maxWidth: 720 }}>
+          Pick a preset for an instant swap. Or fine-tune individual colors below — every change is live across all modules and syncs to your cloud workspace.
+        </div>
+      </div>
+
+      <Panel title="Presets" accent={T.brass}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+          {Object.entries(THEME_PRESETS).map(([name, palette]) => (
+            <button key={name} onClick={() => applyPreset(name)}
+              style={{ background: palette.bgRaised, border: "1px solid " + palette.border, padding: 12, borderRadius: 3, cursor: "pointer", textAlign: "left", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, color: palette.text, textTransform: "uppercase" }}>{name}</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                {["brass", "cyan", "green", "amber", "red"].map(k => (
+                  <div key={k} style={{ width: 18, height: 18, background: palette[k], borderRadius: 2 }} />
+                ))}
+              </div>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      {COLOR_GROUPS.map(group => (
+        <Panel key={group.title} title={group.title}>
+          <div style={{ fontFamily: FF.body, fontSize: 12, color: T.textDim, marginBottom: 12, lineHeight: 1.5 }}>{group.desc}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+            {group.keys.map(({ key, label }) => {
+              const value = T[key];
+              return (
+                <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: T.bgSunken, border: "1px solid " + T.border, borderRadius: 2 }}>
+                  <label style={{ position: "relative", width: 32, height: 32, flexShrink: 0, cursor: "pointer", borderRadius: 2, border: "1px solid " + T.border, background: value, overflow: "hidden" }}>
+                    <input type="color" value={value} onChange={e => setColor(key, e.target.value)}
+                      style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} />
+                  </label>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: FF.body, fontSize: 12, color: T.text, lineHeight: 1.3 }}>{label}</div>
+                    <input value={value} onChange={e => setColor(key, e.target.value)}
+                      style={{ marginTop: 2, width: "100%", background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, padding: 0, boxSizing: "border-box" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      ))}
+
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", background: T.bgRaised, border: "1px solid " + T.border, borderRadius: 3 }}>
+        <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.textDim, lineHeight: 1.5 }}>
+          Changes save automatically and sync across all your devices.
+        </div>
+        <Btn variant="danger" icon="trash" onClick={reset}>Reset to Default</Btn>
+      </div>
+    </div>
+  );
+};
+
+// ---------- AUDIT VIEW ----------
+const AuditView = () => {
+  const [log, setLog] = useState(() => LS.get("audit_log", []));
+  const clear = () => { LS.set("audit_log", []); setLog([]); };
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Audit Log</div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Every AI action, on the record.</h1>
+        </div>
+        {log.length > 0 && <Btn variant="danger" icon="trash" onClick={clear} size="sm">Clear Log</Btn>}
+      </div>
+      <Panel title={"Entries — " + log.length}>
+        {log.length === 0 ? (
+          <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: "30px 0", textAlign: "center", letterSpacing: 1 }}>NO ACTIVITY YET</div>
+        ) : (
+          <div style={{ maxHeight: 600, overflowY: "auto" }}>
+            {log.map((e, i) => (
+              <div key={i} style={{ padding: "12px 0", borderBottom: i < log.length - 1 ? "1px solid " + T.border : "none" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", fontFamily: FF.mono, fontSize: 10, letterSpacing: 0.6 }}>
+                  <span style={{ color: T.textFaint }}>{new Date(e.ts).toLocaleString()}</span>
+                  <span style={{ color: T.brass, textTransform: "uppercase", letterSpacing: 1.4 }}>{e.source}</span>
+                  <span style={{ color: e.status === "ok" ? T.green : T.red, textTransform: "uppercase", letterSpacing: 1.4 }}>{e.status}</span>
+                  <span style={{ color: T.textDim }}>{e.model}</span>
+                  {e.ms && <span style={{ color: T.textDim }}>{(e.ms / 1000).toFixed(1)}s</span>}
+                  {e.replyLen && <span style={{ color: T.textDim }}>{e.replyLen} chars out</span>}
+                </div>
+                <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.text, marginTop: 4, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.prompt}</div>
+                {e.error && <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.red, marginTop: 3 }}>{e.error}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+};
+
+// ---------- APP ----------
+const App = () => {
+  const [view, setView] = useState("dashboard");
+  const [palette, setPalette] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [apiKey, setApiKey] = useState(() => LS.get("api_key", ""));
+  const [model, setModel] = useState(() => LS.get("model", "claude-sonnet-4-6"));
+  const [, themeTick] = useState(0);
+
+  useEffect(() => {
+    // Open settings on first visit if no key
+    if (!apiKey) setSettings(true);
+  }, []);
+
+  useEffect(() => {
+    const onTheme = () => themeTick(x => x + 1);
+    window.addEventListener("execos:theme-changed", onTheme);
+    return () => window.removeEventListener("execos:theme-changed", onTheme);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setPalette(p => !p); }
+      if (e.key === "Escape") { setPalette(false); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <TopBar onOpenPalette={() => setPalette(true)} onOpenSettings={() => setSettings(true)} hasKey={!!apiKey} />
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        <Sidebar active={view} onChange={setView} />
+        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+          {view === "dashboard" && <Dashboard onJump={setView} />}
+          {view === "terminal" && <TerminalView apiKey={apiKey} model={model} />}
+          {view === "sites" && <SitesView apiKey={apiKey} model={model} />}
+          {view === "focus" && <FocusOS apiKey={apiKey} model={model} />}
+          {view === "email" && <EmailView apiKey={apiKey} model={model} />}
+          {view === "reports" && <ReportsView apiKey={apiKey} model={model} />}
+          {view === "memory" && <MemoryView />}
+          {view === "notes" && <NotesView />}
+          {view === "audit" && <AuditView />}
+          {view === "theme" && <ThemeView />}
+          {view === "help" && <HelpView />}
+        </div>
+      </div>
+      <Palette open={palette} onClose={() => setPalette(false)} onJump={setView} />
+      <Settings open={settings} onClose={() => setSettings(false)} apiKey={apiKey} setApiKey={setApiKey} model={model} setModel={setModel} />
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
