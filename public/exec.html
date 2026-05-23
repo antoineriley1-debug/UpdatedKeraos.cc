@@ -166,6 +166,19 @@ OUTPUT: Operational. Antoine should be able to use what you produce without edit
 
 NEVER fabricate vendor names, dates, ticket numbers, hospital codes, or specifics you don't have. If asked about something you don't know, say so plainly.`;
 
+// =============================================================
+// EXEC_OS_DEFAULTS — Antoine's specific endpoints, baked in.
+// Auto-fills every "Configure" screen on any new device so he
+// never has to hunt for these URLs again. Only the workspace key
+// (his data password) and the Anthropic API key still need typing.
+// =============================================================
+const EXEC_OS_DEFAULTS = {
+  smartsheetUrl: "https://priority-task-six.vercel.app/api/smartsheet/tasks?token=xK7mP2nQ8jR4vL9wY3sB6fH1tA5dG0cZ",
+  plaudListUrl: "https://priority-task-six.vercel.app/api/plaud/list?token=xK7mP2nQ8jR4vL9wY3sB6fH1tA5dG0cZ",
+  supabaseUrl: "https://kfkjagottniayrxayeav.supabase.co",
+  supabaseAnonKey: "sb_publishable_qwbvvkfUkZk_Qa1gez6J8A_eTiwc0t6",
+};
+
 // ---------- ICONS ----------
 const Icon = ({ name, size=14, color="currentColor" }) => {
   const P = {
@@ -1028,7 +1041,18 @@ const TaskRow = ({ task, onClick }) => {
 };
 
 const Dashboard = ({ onJump }) => {
-  const [tasksApi, setTasksApi] = useState(() => LS.get("tasks_api_url", ""));
+  // Saved URL wins; otherwise fall back to baked-in default so a fresh
+  // device shows priority tasks immediately instead of an empty setup form.
+  // Effective value: saved (if non-empty) OR default.
+  const savedUrl = LS.get("tasks_api_url", "");
+  const [tasksApi, setTasksApi] = useState(() => (savedUrl && savedUrl.trim()) ? savedUrl : EXEC_OS_DEFAULTS.smartsheetUrl);
+  // If no saved URL existed, persist the default so cloud sync sees it too
+  // (otherwise the next cloud pull will null it out across devices).
+  useEffect(() => {
+    if (!savedUrl || !savedUrl.trim()) {
+      LS.set("tasks_api_url", EXEC_OS_DEFAULTS.smartsheetUrl);
+    }
+  }, []);
   const [tasks, setTasks] = useState([]);
   const [sheetName, setSheetName] = useState("");
   const [fetchedAt, setFetchedAt] = useState(0);
@@ -2725,7 +2749,15 @@ function fmtDate(iso) {
 }
 
 const RecordingsView = ({ apiKey, model }) => {
-  const [apiBase, setApiBase] = useState(() => LS.get("plaud_api_base", ""));
+  // Same pattern as Dashboard — saved URL wins, otherwise use baked-in default.
+  const savedPlaudBase = LS.get("plaud_api_base", "");
+  const [apiBase, setApiBase] = useState(() => (savedPlaudBase && savedPlaudBase.trim()) ? savedPlaudBase : EXEC_OS_DEFAULTS.plaudListUrl);
+  // Persist the default so cloud sync doesn't null it out across devices.
+  useEffect(() => {
+    if (!savedPlaudBase || !savedPlaudBase.trim()) {
+      LS.set("plaud_api_base", EXEC_OS_DEFAULTS.plaudListUrl);
+    }
+  }, []);
   const [recordings, setRecordings] = useState(() => LS.get("plaud_recordings", []));
   // Local metadata overrides — stored separately from raw Plaud data so a fresh sync
   // never destroys user edits. Keyed by Plaud file_id.
@@ -2737,7 +2769,9 @@ const RecordingsView = ({ apiKey, model }) => {
   const [activeId, setActiveId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [editingApi, setEditingApi] = useState(!LS.get("plaud_api_base", ""));
+  // Setup screen only shows if there's no saved URL AND no default. With defaults
+  // baked in, this is effectively never — the list view loads immediately.
+  const [editingApi, setEditingApi] = useState(!LS.get("plaud_api_base", "") && !EXEC_OS_DEFAULTS.plaudListUrl);
   const [draftApi, setDraftApi] = useState("");
   const [aiBusy, setAiBusy] = useState("");
   const [aiOutput, setAiOutput] = useState("");
