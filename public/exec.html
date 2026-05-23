@@ -2055,16 +2055,24 @@ const ReportsView = ({ apiKey, model }) => {
 const Settings = ({ open, onClose, apiKey, setApiKey, model, setModel }) => {
   const [tab, setTab] = useState("ai");
   const [draft, setDraft] = useState(apiKey || "");
-  // Cloud config drafts
+  // Built-in defaults — auto-populate on any new device so Antoine doesn't have
+  // to re-paste these three things every time. The workspace key (his password)
+  // is the only secret he ever needs to type. URL and publishable key are
+  // designed to be visible in browser code anyway.
+  const DEFAULT_SUPABASE_URL = "https://kfkjagottniayrxayeav.supabase.co";
+  const DEFAULT_SUPABASE_ANON = "sb_publishable_qwbvvkfUkZk_Qa1gez6J8A_eTiwc0t6";
+  // Cloud config drafts — read saved values OR fall back to defaults
   const initialCfg = LS.get("supabase_config", { url: "", anonKey: "", workspaceKey: "" });
-  const [cfgUrl, setCfgUrl] = useState(initialCfg.url || "");
-  const [cfgAnon, setCfgAnon] = useState(initialCfg.anonKey || "");
+  const [cfgUrl, setCfgUrl] = useState(initialCfg.url || DEFAULT_SUPABASE_URL);
+  const [cfgAnon, setCfgAnon] = useState(initialCfg.anonKey || DEFAULT_SUPABASE_ANON);
   const [cfgWorkspace, setCfgWorkspace] = useState(initialCfg.workspaceKey || "");
   const [testState, setTestState] = useState({ state: "idle", msg: "" });
   useEffect(() => {
     setDraft(apiKey || "");
     const cfg = LS.get("supabase_config", { url: "", anonKey: "", workspaceKey: "" });
-    setCfgUrl(cfg.url || ""); setCfgAnon(cfg.anonKey || ""); setCfgWorkspace(cfg.workspaceKey || "");
+    setCfgUrl(cfg.url || DEFAULT_SUPABASE_URL);
+    setCfgAnon(cfg.anonKey || DEFAULT_SUPABASE_ANON);
+    setCfgWorkspace(cfg.workspaceKey || "");
   }, [apiKey, open]);
   if (!open) return null;
 
