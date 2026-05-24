@@ -24,6 +24,8 @@
   @keyframes execspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes execos-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes execos-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.7; } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
   .spin { animation: execspin 0.9s linear infinite; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: var(--bg-sunken); }
@@ -177,6 +179,7 @@ const EXEC_OS_DEFAULTS = {
   plaudListUrl: "https://priority-task-six.vercel.app/api/plaud/list?token=xK7mP2nQ8jR4vL9wY3sB6fH1tA5dG0cZ",
   supabaseUrl: "https://kfkjagottniayrxayeav.supabase.co",
   supabaseAnonKey: "sb_publishable_qwbvvkfUkZk_Qa1gez6J8A_eTiwc0t6",
+  emailInboxBase: "https://priority-task-six.vercel.app/api/email",  // GET /list, POST /update
 };
 
 // ---------- ICONS ----------
@@ -429,18 +432,22 @@ async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey
     }
   }
 
-  // Build the user message — if images are provided, use the multimodal content array format
+  // Build the user message — if images are provided, use the multimodal content array format.
+  // PDFs and images both come through here. PDFs use document-type blocks; images use image-type blocks.
   let userContent;
   if (images && images.length) {
     userContent = [
-      ...images.map(img => ({
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: img.mediaType || "image/jpeg",
-          data: img.data, // base64 without data: prefix
-        },
-      })),
+      ...images.map(img => {
+        const isPdf = img.kind === "pdf" || img.mediaType === "application/pdf";
+        return {
+          type: isPdf ? "document" : "image",
+          source: {
+            type: "base64",
+            media_type: img.mediaType || "image/jpeg",
+            data: img.data, // base64 without data: prefix
+          },
+        };
+      }),
       { type: "text", text: prompt },
     ];
   } else {
@@ -910,11 +917,15 @@ const TaskUtil = {
     return !isNaN(due.getTime()) && due < new Date();
   },
   ageInDays: (t) => {
-    const start = t?.startDate || t?.dueDate;
+    // Age = how long the task has been open. Only valid if we have a real
+    // creation/start date. Falling back to dueDate gave negative values for
+    // tasks due in the future (misleading "−23d in queue").
+    const start = t?.startDate || t?.createdDate || t?.created || t?.raw?.["Created Date"] || t?.raw?.Created;
     if (!start) return null;
     const s = new Date(start);
     if (isNaN(s.getTime())) return null;
-    return Math.floor((Date.now() - s.getTime()) / 86400000);
+    const days = Math.floor((Date.now() - s.getTime()) / 86400000);
+    return days < 0 ? null : days;
   },
   statusColor: (t) => {
     if (TaskUtil.isDone(t)) return T.green;
@@ -1040,7 +1051,7 @@ const TaskRow = ({ task, onClick }) => {
   );
 };
 
-const Dashboard = ({ onJump }) => {
+const Dashboard = ({ onJump, apiKey, model }) => {
   // Saved URL wins; otherwise fall back to baked-in default so a fresh
   // device shows priority tasks immediately instead of an empty setup form.
   // Effective value: saved (if non-empty) OR default.
@@ -1066,7 +1077,17 @@ const Dashboard = ({ onJump }) => {
   const [sortBy, setSortBy] = useState({ field: "default", dir: "asc" });
   const [sites] = useState(() => LS.get("sites", []));
   const [audit] = useState(() => LS.get("audit_log", []));
+  // Detail panel state — when a task row is clicked, this opens the side panel
+  const [activeTask, setActiveTask] = useState(null);
+  const [taskAiBusy, setTaskAiBusy] = useState("");
+  const [taskAiOutput, setTaskAiOutput] = useState("");
   const [, forceRefresh] = useState(0);
+  // Close detail panel on global Escape
+  useEffect(() => {
+    const onEscape = () => { setActiveTask(null); setTaskAiOutput(""); };
+    window.addEventListener("execos:escape", onEscape);
+    return () => window.removeEventListener("execos:escape", onEscape);
+  }, []);
 
   useEffect(() => {
     if (!tasksApi) { setTasks([]); setTasksError(""); window.EXEC_OS_LIVE_TASKS = []; return; }
@@ -1156,7 +1177,48 @@ const Dashboard = ({ onJump }) => {
     );
   }
 
+  // Build AI actions for the detail panel — runs Kera against this specific task's context
+  const TASK_AI_ACTIONS = [
+    { id: "brief", icon: "spark", label: "Brief Me on This Task",
+      prompt: (t) => `Give Antoine a 4-sentence executive brief on this priority task. What it is, where it stands, what's at risk, what to do next. Plain prose.\n\nTASK: ${t.task}\nSTATUS: ${t.status || "—"}\nOWNER: ${t.owner || "—"}\nSITE: ${t.site || "—"}\nDUE: ${t.dueDate || "—"}\nPRIORITY: ${t.priority || "—"}\nNOTES: ${t.notes || "(none)"}\n\nAll Smartsheet columns:\n${Object.entries(t.raw || {}).map(([k,v]) => `${k}: ${v}`).join("\n")}` },
+    { id: "update", icon: "mail", label: "Draft Update to Owner",
+      prompt: (t) => `Draft a status update email from Antoine to ${t.owner || "the task owner"} about this task. Direct, professional, ask for an ETA if not on track. Plain prose, no bullets unless data demands it.\n\nTASK: ${t.task}\nSTATUS: ${t.status || "—"}\nDUE: ${t.dueDate || "—"}\nNOTES: ${t.notes || "(none)"}` },
+    { id: "escalate", icon: "spark", label: "Draft Escalation",
+      prompt: (t) => `Draft an escalation email from Antoine to leadership (Heather West or Chris Castle depending on severity) about this stuck task. Lead with operational risk. Plain prose.\n\nTASK: ${t.task}\nSTATUS: ${t.status || "—"}\nOWNER: ${t.owner || "—"}\nSITE: ${t.site || "—"}\nDUE: ${t.dueDate || "—"}\nAGE: ${TaskUtil.ageInDays(t) || "—"} days\nNOTES: ${t.notes || "(none)"}` },
+    { id: "next", icon: "check", label: "Next 3 Steps",
+      prompt: (t) => `Give Antoine the next 3 concrete steps to move this task forward. Each step: action, who's involved, expected outcome. Be specific.\n\nTASK: ${t.task}\nSTATUS: ${t.status || "—"}\nOWNER: ${t.owner || "—"}\nSITE: ${t.site || "—"}\nNOTES: ${t.notes || "(none)"}` },
+    { id: "history", icon: "list", label: "Talking Points for 1:1",
+      prompt: (t) => `Generate talking points for a 1:1 conversation about this task. What to ask, what to confirm, what to push on. 5-7 bullet-style points but in plain prose paragraphs.\n\nTASK: ${t.task}\nSTATUS: ${t.status || "—"}\nOWNER: ${t.owner || "—"}\nSITE: ${t.site || "—"}\nDUE: ${t.dueDate || "—"}\nNOTES: ${t.notes || "(none)"}` },
+  ];
+  const runTaskAi = async (action) => {
+    if (!activeTask || !apiKey) return;
+    setTaskAiBusy(action.id);
+    setTaskAiOutput("");
+    try {
+      const out = await callClaude({
+        prompt: action.prompt(activeTask),
+        apiKey, model,
+        source: "dashboard-task-" + action.id,
+        maxTokens: 2048,
+      });
+      setTaskAiOutput(out);
+    } catch (e) {
+      setTaskAiOutput("Error: " + e.message);
+    } finally {
+      setTaskAiBusy("");
+    }
+  };
+  const activeTaskOverdue = activeTask ? TaskUtil.isOverdue(activeTask) : false;
+  const activeTaskAge = activeTask ? TaskUtil.ageInDays(activeTask) : null;
+  const activeTaskStatusColor = activeTask ? TaskUtil.statusColor(activeTask) : T.textDim;
+  // Build list of "extra" raw fields not already shown in the main grid
+  const SHOWN_FIELDS = new Set(["task", "status", "owner", "due date", "due", "priority", "notes", "site", "comments"]);
+  const extraFields = activeTask && activeTask.raw
+    ? Object.entries(activeTask.raw).filter(([k, v]) => v && !SHOWN_FIELDS.has(k.toLowerCase()) && String(v).trim())
+    : [];
+
   return (
+    <>
     <div style={{ padding: S.xxl, display: "flex", flexDirection: "column", gap: S.xl, maxWidth: 1600, margin: "0 auto" }}>
 
       {/* Header — minimal, contextual */}
@@ -1372,7 +1434,7 @@ const Dashboard = ({ onJump }) => {
               </thead>
               <tbody>
                 {sortedTasks.map(t => (
-                  <TaskRow key={t.id} task={t} onClick={() => onJump("terminal")} />
+                  <TaskRow key={t.id} task={t} onClick={() => { setActiveTask(t); setTaskAiOutput(""); }} />
                 ))}
               </tbody>
             </table>
@@ -1443,6 +1505,153 @@ const Dashboard = ({ onJump }) => {
         </Panel>
       </div>
     </div>
+
+    {/* Task Detail slide-in panel */}
+    {activeTask && (
+      <>
+        {/* Backdrop */}
+        <div onClick={() => { setActiveTask(null); setTaskAiOutput(""); }}
+          style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            background: "rgba(0,0,0,0.55)", zIndex: 90,
+            animation: "fadeIn 0.15s ease-out",
+          }} />
+        {/* Panel */}
+        <div style={{
+          position: "fixed", top: 0, right: 0, bottom: 0,
+          width: "min(720px, 92vw)",
+          background: T.bgRaised,
+          borderLeft: "1px solid " + T.border,
+          boxShadow: "-8px 0 32px rgba(0,0,0,0.5)",
+          zIndex: 91,
+          overflowY: "auto",
+          animation: "slideInRight 0.2s ease-out",
+        }}>
+          <div style={{ padding: `${S.lg}px ${S.xxl}px`, borderBottom: "1px solid " + T.border, display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: T.bgRaised, zIndex: 1 }}>
+            <div style={{ ...TS.label, color: T.textDim, textTransform: "uppercase", letterSpacing: 2 }}>Task Detail</div>
+            <button onClick={() => { setActiveTask(null); setTaskAiOutput(""); }}
+              style={{ background: "transparent", border: "none", color: T.textDim, fontSize: 18, cursor: "pointer", padding: `${S.xs}px ${S.sm}px`, lineHeight: 1 }}
+              aria-label="Close">×</button>
+          </div>
+
+          <div style={{ padding: `${S.xl}px ${S.xxl}px` }}>
+            {/* Status + priority pills */}
+            <div style={{ display: "flex", gap: S.sm, alignItems: "center", marginBottom: S.md, flexWrap: "wrap" }}>
+              <Pill color={activeTaskStatusColor}>{activeTask.status || "—"}</Pill>
+              {activeTask.priority && <Pill color={T.amber} variant="soft">{activeTask.priority}</Pill>}
+              {activeTask.site && <Pill color={T.accent} variant="soft">{activeTask.site}</Pill>}
+              {activeTaskOverdue && <Pill color={T.red}>OVERDUE</Pill>}
+              {activeTaskAge != null && (
+                <span style={{ ...TS.micro, color: T.textFaint, fontFamily: FF.mono, marginLeft: S.xs }}>
+                  {activeTaskAge}d in queue
+                </span>
+              )}
+            </div>
+
+            {/* Title */}
+            <div style={{ ...TS.h2, color: T.text, lineHeight: 1.3, marginBottom: S.lg }}>
+              {activeTask.task || "(untitled)"}
+            </div>
+
+            {/* Meta grid */}
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: S.md,
+              padding: `${S.md}px ${S.lg}px`,
+              background: T.bgSunken,
+              border: "1px solid " + T.borderFaint,
+              borderRadius: 4,
+              marginBottom: S.xl,
+            }}>
+              <div>
+                <div style={{ ...TS.micro, color: T.textFaint, textTransform: "uppercase", letterSpacing: 1.4, marginBottom: 2 }}>Owner</div>
+                <div style={{ ...TS.body, color: T.text }}>{activeTask.owner || "—"}</div>
+              </div>
+              <div>
+                <div style={{ ...TS.micro, color: T.textFaint, textTransform: "uppercase", letterSpacing: 1.4, marginBottom: 2 }}>Due Date</div>
+                <div style={{ ...TS.body, color: activeTaskOverdue ? T.red : T.text, fontFamily: FF.mono }}>{activeTask.dueDate || "—"}</div>
+              </div>
+              <div>
+                <div style={{ ...TS.micro, color: T.textFaint, textTransform: "uppercase", letterSpacing: 1.4, marginBottom: 2 }}>Priority</div>
+                <div style={{ ...TS.body, color: T.text }}>{activeTask.priority || "—"}</div>
+              </div>
+              <div>
+                <div style={{ ...TS.micro, color: T.textFaint, textTransform: "uppercase", letterSpacing: 1.4, marginBottom: 2 }}>Site</div>
+                <div style={{ ...TS.body, color: T.text, fontFamily: FF.mono }}>{activeTask.site || "—"}</div>
+              </div>
+            </div>
+
+            {/* Full notes (no truncation) */}
+            {activeTask.notes && (
+              <Panel title="Notes">
+                <div style={{ ...TS.body, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                  {activeTask.notes}
+                </div>
+              </Panel>
+            )}
+
+            {/* Extra Smartsheet columns not already shown */}
+            {extraFields.length > 0 && (
+              <div style={{ marginTop: S.lg }}>
+                <Panel title="Additional Fields" subtitle={`${extraFields.length} from Smartsheet`}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: S.sm }}>
+                    {extraFields.map(([k, v]) => (
+                      <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: S.md, padding: `${S.xs}px 0`, borderBottom: "1px solid " + T.borderFaint }}>
+                        <div style={{ ...TS.micro, color: T.textFaint, textTransform: "uppercase", letterSpacing: 1, paddingTop: 2 }}>{k}</div>
+                        <div style={{ ...TS.body, color: T.text, wordBreak: "break-word" }}>{String(v)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+              </div>
+            )}
+
+            {/* Kera AI actions */}
+            <div style={{ marginTop: S.lg }}>
+              <Panel title="Ask Kera" subtitle="Generate from this task's context">
+                <div style={{ display: "flex", flexDirection: "column", gap: S.sm }}>
+                  {TASK_AI_ACTIONS.map(a => (
+                    <Btn key={a.id} icon={a.icon} onClick={() => runTaskAi(a)} loading={taskAiBusy === a.id} disabled={!!taskAiBusy || !apiKey} full>
+                      {a.label}
+                    </Btn>
+                  ))}
+                  {!apiKey && (
+                    <div style={{ ...TS.micro, color: T.amber, marginTop: S.xs, lineHeight: 1.4 }}>
+                      Anthropic API key required. Settings (⚙) → AI / Model.
+                    </div>
+                  )}
+                </div>
+              </Panel>
+            </div>
+
+            {/* Kera output */}
+            {taskAiOutput && (
+              <div style={{ marginTop: S.lg }}>
+                <Panel title="Kera Output" action={
+                  <Btn size="sm" icon="copy" onClick={() => navigator.clipboard?.writeText(taskAiOutput)}>Copy</Btn>
+                }>
+                  <div style={{ ...TS.body, color: T.text, lineHeight: 1.65, whiteSpace: "pre-wrap", maxHeight: 480, overflowY: "auto" }}>{taskAiOutput}</div>
+                </Panel>
+              </div>
+            )}
+
+            {/* Footer actions */}
+            <div style={{ display: "flex", gap: S.sm, marginTop: S.xl, paddingTop: S.lg, borderTop: "1px solid " + T.border, flexWrap: "wrap" }}>
+              <Btn icon="copy" size="sm" onClick={() => navigator.clipboard?.writeText(String(activeTask.id || ""))}>Copy Row ID</Btn>
+              <Btn icon="term" size="sm" onClick={() => {
+                // Pre-load context into terminal and route
+                const ctx = `I want to talk about this priority task:\n\nTASK: ${activeTask.task}\nSTATUS: ${activeTask.status || "—"}\nOWNER: ${activeTask.owner || "—"}\nSITE: ${activeTask.site || "—"}\nDUE: ${activeTask.dueDate || "—"}\nNOTES: ${activeTask.notes || "(none)"}`;
+                LS.set("terminal_prefill", ctx);
+                setActiveTask(null);
+                onJump("terminal");
+              }}>Open in Terminal</Btn>
+            </div>
+          </div>
+        </div>
+      </>
+    )}
+    </>
   );
 };
 
@@ -1485,7 +1694,12 @@ const DashboardSetup = ({ onConfigure, editing, draftTasksApi, setDraftTasksApi,
 // ---------- TERMINAL ----------
 const TerminalView = ({ apiKey, model }) => {
   const [messages, setMessages] = useState(() => LS.get("terminal_messages", []));
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => {
+    // Allow other modules (Dashboard task detail) to prefill the terminal input.
+    const pf = LS.get("terminal_prefill", "");
+    if (pf) { try { localStorage.removeItem("execos:terminal_prefill"); } catch {} return pf; }
+    return "";
+  });
   const [loading, setLoading] = useState(false);
   const [convoActive, setConvoActive] = useState(false);
   const [convoState, setConvoState] = useState("idle"); // idle | listening | thinking | speaking
@@ -1930,10 +2144,269 @@ const FocusOS = ({ apiKey, model }) => {
 
 // ---------- EMAIL ----------
 const EmailView = ({ apiKey, model }) => {
+  // Mode toggle: "single" = the original paste-and-act flow; "investigate" = multi-email deep analysis.
+  const [mode, setMode] = useState("single");
+
+  // -- Single email state --
   const [emailText, setEmailText] = useState("");
   const [output, setOutput] = useState("");
   const [loading, setLoading] = useState(false);
   const [activeAction, setActiveAction] = useState("");
+
+  // -- Investigate Thoroughly state --
+  // Each email in `emails` is { id, label, text, files: [{name, mediaType, data, dataUrl, kind}] }
+  // kind = "image" for images/PDFs that Claude sees natively, or "text" for plain-text files we read into the body
+  const [emails, setEmails] = useState([{ id: "e1", label: "Email 1", text: "", files: [] }]);
+  const [investigation, setInvestigation] = useState("");
+  const [investigationLoading, setInvestigationLoading] = useState(false);
+  const [investigationStage, setInvestigationStage] = useState("");
+  const [investigationError, setInvestigationError] = useState("");
+  const [focusQuestion, setFocusQuestion] = useState("");
+
+  // -- Inbox (forwarded-email ingestion) state --
+  // The Inbox tab reads from the Vercel /api/email/list endpoint, which
+  // pulls rows from the Supabase ingested_emails table. We cache the
+  // last fetch in localStorage so the dashboard renders instantly on tab
+  // re-entry while a fresh fetch runs in the background.
+  const [inbox, setInbox] = useState(() => LS.get("inbox_emails", []));
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [inboxError, setInboxError] = useState("");
+  const [inboxFetchedAt, setInboxFetchedAt] = useState(() => LS.get("inbox_fetched_at", 0));
+  const [inboxFilter, setInboxFilter] = useState("all");      // all | unread | pinned | review | verified
+  const [inboxSiteFilter, setInboxSiteFilter] = useState(""); // empty = all sites
+  const [inboxSearch, setInboxSearch] = useState("");
+  const [activeInboxId, setActiveInboxId] = useState(null);
+  const [inboxAiBusy, setInboxAiBusy] = useState("");
+  const [inboxAiOutput, setInboxAiOutput] = useState("");
+  const [inboxBaseUrl] = useState(() => LS.get("email_inbox_base", EXEC_OS_DEFAULTS.emailInboxBase || ""));
+
+  // Build workspace key from Cloud config
+  const inboxWorkspaceKey = () => {
+    try {
+      const cfg = LS.get("supabase_config", null);
+      return cfg && cfg.workspaceKey ? cfg.workspaceKey : "";
+    } catch { return ""; }
+  };
+
+  // Fetch from /api/email/list
+  const refreshInbox = async ({ silent = false } = {}) => {
+    setInboxError("");
+    const ws = inboxWorkspaceKey();
+    if (!ws) { setInboxError("Workspace key not set. Settings → Cloud Sync."); return; }
+    if (!inboxBaseUrl) { setInboxError("Email inbox endpoint not configured."); return; }
+    if (!silent) setInboxLoading(true);
+    try {
+      const url = inboxBaseUrl.replace(/\/$/, "") + "/list?workspace=" + encodeURIComponent(ws) + "&limit=100";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const rows = Array.isArray(data.emails) ? data.emails : [];
+      setInbox(rows);
+      LS.set("inbox_emails", rows);
+      const now = Date.now();
+      setInboxFetchedAt(now);
+      LS.set("inbox_fetched_at", now);
+    } catch (e) {
+      setInboxError("Couldn't fetch inbox: " + e.message);
+    } finally {
+      setInboxLoading(false);
+    }
+  };
+
+  // Update a single email row server-side and patch the local cache.
+  const patchInboxEmail = async (id, patch) => {
+    const ws = inboxWorkspaceKey();
+    if (!ws || !inboxBaseUrl) return;
+    // Optimistic update
+    setInbox(prev => {
+      const next = prev.map(e => e.id === id ? { ...e, ...patch } : e);
+      LS.set("inbox_emails", next);
+      return next;
+    });
+    try {
+      const res = await fetch(inboxBaseUrl.replace(/\/$/, "") + "/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace: ws, email_id: id, patch }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+    } catch (e) {
+      setInboxError("Update failed: " + e.message);
+    }
+  };
+
+  // Save Kera's extraction JSON for an email.
+  const saveExtraction = async (id, extraction) => {
+    const ws = inboxWorkspaceKey();
+    if (!ws || !inboxBaseUrl) return;
+    setInbox(prev => {
+      const next = prev.map(e => e.id === id ? { ...e, extraction: [extraction] } : e);
+      LS.set("inbox_emails", next);
+      return next;
+    });
+    try {
+      await fetch(inboxBaseUrl.replace(/\/$/, "") + "/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace: ws, email_id: id, extraction }),
+      });
+    } catch (e) {
+      // Non-fatal — the extraction is cached locally.
+    }
+  };
+
+  // Filtered, searched, sorted view of the inbox.
+  const visibleInbox = (() => {
+    let list = [...(inbox || [])];
+    if (inboxFilter === "pinned")   list = list.filter(e => e.pinned);
+    if (inboxFilter === "review")   list = list.filter(e => e.in_review_queue);
+    if (inboxFilter === "verified") list = list.filter(e => e.verified_source);
+    if (inboxFilter === "unread")   list = list.filter(e => !e.archived);
+    if (inboxSiteFilter) {
+      list = list.filter(e => {
+        const ex = (e.extraction && e.extraction[0]) || {};
+        const sites = ex.sites || [];
+        return sites.includes(inboxSiteFilter);
+      });
+    }
+    if (inboxSearch.trim()) {
+      const q = inboxSearch.toLowerCase();
+      list = list.filter(e => {
+        const blob = [e.subject, e.from_addr, e.from_name, e.original_from, e.text_body, (e.extraction && e.extraction[0] && e.extraction[0].summary) || ""].join(" ").toLowerCase();
+        return blob.includes(q);
+      });
+    }
+    list.sort((a, b) => {
+      // Pinned first, then most recent
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      return new Date(b.received_at || 0) - new Date(a.received_at || 0);
+    });
+    return list;
+  })();
+
+  const activeInboxEmail = activeInboxId ? visibleInbox.find(e => e.id === activeInboxId) || inbox.find(e => e.id === activeInboxId) : null;
+
+  // Auto-refresh on first mount of Inbox tab
+  useEffect(() => {
+    if (mode === "inbox" && !inboxFetchedAt) {
+      refreshInbox({ silent: false });
+    }
+  }, [mode]);
+
+  // Kera-powered actions on a single inbox email
+  const INBOX_AI_ACTIONS = [
+    { id: "extract", label: "Auto-Extract Intel", icon: "spark",
+      run: async (em) => {
+        const prompt = `You are Kera. Extract structured intelligence from this forwarded email. Return ONLY valid JSON, no preamble, no markdown fences.
+
+Fields (use empty arrays for missing values, null for missing strings):
+{
+  "topic": "one-line topic",
+  "urgency": "low" | "medium" | "high" | "critical",
+  "category": "vendor-update" | "outage" | "project" | "equipment" | "compliance" | "approval" | "other",
+  "sites": ["MWHC", "MGUH", ...],
+  "vendors": ["Limbach", "Siemens", ...],
+  "people": ["First Last", ...],
+  "equipment": ["AHU-6", "Chiller-3", ...],
+  "rooms": ["2B-312", ...],
+  "projects": ["P15398", ...],
+  "systems": ["chilled water", "steam", ...],
+  "action_items": [{"who": "...", "what": "...", "by_when": "...", "confidence": "low|med|high"}],
+  "commitments": [{"who": "...", "what": "...", "by_when": "..."}],
+  "dates_mentioned": [{"date": "YYYY-MM-DD or text", "why": "..."}],
+  "approvals_needed": [{"who": "...", "what": "..."}],
+  "deadlines": [{"what": "...", "by_when": "..."}],
+  "summary": "3-line executive summary"
+}
+
+EMAIL:
+From: ${em.from_addr || ""} ${em.from_name ? "(" + em.from_name + ")" : ""}
+${em.original_from ? "Originally from: " + em.original_from + "\n" : ""}Subject: ${em.subject || ""}
+Date: ${em.date_header || em.received_at || ""}
+
+${em.text_body || em.html_body || "(no body)"}`;
+        const reply = await callClaude({ prompt, apiKey, model, source: "inbox-extract", maxTokens: 3000 });
+        // Strip code fences if Kera added them anyway
+        const cleaned = reply.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+        let parsed = null;
+        try { parsed = JSON.parse(cleaned); } catch { /* fall through */ }
+        if (!parsed) return "Kera returned non-JSON. Output:\n\n" + reply;
+        await saveExtraction(em.id, { ...parsed, raw_extraction: parsed });
+        return "Extraction saved. " + (parsed.summary || "");
+      }
+    },
+    { id: "summarize", label: "Summarize Thread", icon: "file",
+      run: async (em) => {
+        const prompt = `Summarize this forwarded email thread for Twiney in 4 sentences max. Plain prose. Then add a one-line "What you owe:" if Twiney has an action.
+
+EMAIL:
+From: ${em.from_addr || ""}
+Subject: ${em.subject || ""}
+
+${em.text_body || em.html_body || ""}`;
+        return await callClaude({ prompt, apiKey, model, source: "inbox-summarize", maxTokens: 1200 });
+      }
+    },
+    { id: "actions", label: "Extract Action Items", icon: "list",
+      run: async (em) => {
+        const prompt = `Extract every action item from this email. Numbered list. Each item: owner, action, due date if stated, confidence (low/med/high). Plain prose for the action descriptions.
+
+EMAIL:
+From: ${em.from_addr || ""}
+Subject: ${em.subject || ""}
+
+${em.text_body || em.html_body || ""}`;
+        return await callClaude({ prompt, apiKey, model, source: "inbox-actions", maxTokens: 1500 });
+      }
+    },
+    { id: "task", label: "Create Task (Draft)", icon: "check",
+      run: async (em) => {
+        const prompt = `Convert this email into a single Smartsheet task entry for Twiney's priority tracker. Return the fields as plain text:
+
+Task: (one-line title)
+Owner: (best guess based on email)
+Site: (MedStar site code if identifiable)
+Priority: (Low/Medium/High/Critical)
+Due Date: (YYYY-MM-DD if stated, otherwise blank)
+Notes: (2-3 sentence summary including any relevant context)
+
+EMAIL:
+From: ${em.from_addr || ""}
+Subject: ${em.subject || ""}
+
+${em.text_body || em.html_body || ""}`;
+        return await callClaude({ prompt, apiKey, model, source: "inbox-task", maxTokens: 800 });
+      }
+    },
+    { id: "reply", label: "Draft Reply", icon: "send",
+      run: async (em) => {
+        const prompt = `Draft a professional reply to this email in Twiney's voice — direct, technically precise, executive-appropriate. Plain prose, no bullets unless content requires them.
+
+EMAIL:
+From: ${em.from_addr || ""}
+Subject: ${em.subject || ""}
+
+${em.text_body || em.html_body || ""}`;
+        return await callClaude({ prompt, apiKey, model, source: "inbox-reply", maxTokens: 1500 });
+      }
+    },
+  ];
+
+  const runInboxAi = async (action, email) => {
+    if (!apiKey) { setInboxAiOutput("Set Anthropic API key in Settings first."); return; }
+    setInboxAiBusy(action.id);
+    setInboxAiOutput("");
+    try {
+      const out = await action.run(email);
+      setInboxAiOutput(out);
+    } catch (e) {
+      setInboxAiOutput("Error: " + e.message);
+    } finally {
+      setInboxAiBusy("");
+    }
+  };
+
+
   const actions = [
     { id:"summarize", label:"Summarize", icon:"file", prompt: e => `Summarize this email thread for an executive. 3 lines max. Then list any commitments, blockers, and unanswered questions.\n\n---\n${e}` },
     { id:"draft", label:"Draft Reply", icon:"send", prompt: e => `Draft a professional reply to this email in Twiney's voice — direct, executive-appropriate, plain prose. No bullets unless content requires them.\n\n---\n${e}` },
@@ -1949,36 +2422,707 @@ const EmailView = ({ apiKey, model }) => {
     catch (e) { setOutput("Error: " + e.message); }
     finally { setLoading(false); }
   };
+
+  // ---- Investigate Thoroughly helpers ----
+
+  // Read a file. Plain-text formats (.txt, .eml, .msg, .csv, .json) become text and append to the email body.
+  // Images and PDFs become base64 attachments that go to Claude as image blocks (Claude can see PDFs natively).
+  const readFile = (file) => new Promise((resolve, reject) => {
+    const name = file.name || "file";
+    const lower = name.toLowerCase();
+    const isText = /\.(txt|eml|msg|csv|json|md|log|html)$/i.test(lower) || (file.type && /^text\//.test(file.type));
+    const isImage = /^image\//.test(file.type || "");
+    const isPdf = /\.pdf$/i.test(lower) || file.type === "application/pdf";
+
+    if (isText) {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ kind: "text", name, text: String(reader.result || "") });
+      reader.onerror = () => reject(new Error("Couldn't read " + name));
+      reader.readAsText(file);
+    } else if (isImage) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1600;
+          let w = img.width, h = img.height;
+          if (Math.max(w, h) > MAX) {
+            const scale = MAX / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          const comma = dataUrl.indexOf(",");
+          resolve({ kind: "image", name, mediaType: "image/jpeg", data: dataUrl.slice(comma + 1), dataUrl, width: w, height: h });
+        };
+        img.onerror = () => reject(new Error("Couldn't decode image " + name));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(new Error("Couldn't read " + name));
+      reader.readAsDataURL(file);
+    } else if (isPdf) {
+      // PDFs go through as document blocks. Claude can see them natively.
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        const comma = dataUrl.indexOf(",");
+        resolve({ kind: "pdf", name, mediaType: "application/pdf", data: dataUrl.slice(comma + 1), dataUrl });
+      };
+      reader.onerror = () => reject(new Error("Couldn't read PDF " + name));
+      reader.readAsDataURL(file);
+    } else {
+      // Unknown — try reading as text. If it ends up gibberish, the user can see and remove it.
+      const reader = new FileReader();
+      reader.onload = () => resolve({ kind: "text", name, text: String(reader.result || ""), warning: "Unknown file type — read as text. May display incorrectly." });
+      reader.onerror = () => reject(new Error("Couldn't read " + name));
+      reader.readAsText(file);
+    }
+  });
+
+  const handleEmailFiles = async (emailId, fileList) => {
+    setInvestigationError("");
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    try {
+      const processed = await Promise.all(files.map(readFile));
+      setEmails(prev => prev.map(em => {
+        if (em.id !== emailId) return em;
+        // Text files get appended to body. Image/PDF files become attachments.
+        let nextText = em.text;
+        const nextFiles = [...em.files];
+        for (const p of processed) {
+          if (p.kind === "text") {
+            nextText = (nextText ? nextText + "\n\n---\n" : "") + `[Attached file: ${p.name}]\n` + p.text;
+          } else {
+            nextFiles.push(p);
+          }
+        }
+        return { ...em, text: nextText, files: nextFiles };
+      }));
+    } catch (err) {
+      setInvestigationError(err.message || "File read failed.");
+    }
+  };
+
+  const addEmail = () => setEmails(prev => [...prev, { id: "e" + (prev.length + 1) + "_" + Date.now().toString(36), label: "Email " + (prev.length + 1), text: "", files: [] }]);
+  const removeEmail = (id) => setEmails(prev => prev.length === 1 ? prev : prev.filter(e => e.id !== id));
+  const updateEmail = (id, patch) => setEmails(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+  const removeFile = (emailId, idx) => setEmails(prev => prev.map(e => e.id === emailId ? { ...e, files: e.files.filter((_, i) => i !== idx) } : e));
+
+  // The deep analysis runs in TWO passes for thoroughness.
+  // Pass 1: each email gets analyzed individually (so per-email facts don't bleed into one another).
+  // Pass 2: a meta-analysis ties everything together with timeline, players, conflicts, hidden subtext, etc.
+  // If the user added a focus question, both passes incorporate it.
+  const runInvestigation = async () => {
+    setInvestigationError("");
+    const populated = emails.filter(e => e.text.trim() || e.files.length);
+    if (!populated.length) {
+      setInvestigationError("Add at least one email — paste text or upload a file.");
+      return;
+    }
+    if (!apiKey) {
+      setInvestigationError("Anthropic API key required. Open Settings (gear icon) to set one.");
+      return;
+    }
+    setInvestigationLoading(true);
+    setInvestigation("");
+
+    try {
+      // ===== PASS 1: individual analysis of each email =====
+      setInvestigationStage("Reading each email...");
+      const focusClause = focusQuestion.trim() ? `\n\nFOCUS QUESTION FROM TWINEY: ${focusQuestion.trim()}\nKeep this in mind but still do a complete read.` : "";
+      const perEmailAnalyses = [];
+      for (let i = 0; i < populated.length; i++) {
+        const em = populated[i];
+        const imageAttachments = em.files.filter(f => f.kind === "image" || f.kind === "pdf");
+        const prompt = `You are Kera, executive AI for Antoine "Twiney" Riley Sr., Director of Systems Maintenance at Crothall/MedStar (10 MedStar hospitals).
+
+Analyze ONE email thread thoroughly. This is pass 1 of 2 — focused on THIS thread alone. Be exhaustive.
+
+Cover these dimensions:
+1. **Sender / Recipients / Date** — who is talking to whom and when (if discernible from headers or context)
+2. **Subject / Topic** — what is this thread about in one sentence
+3. **Surface content** — what is literally being said, point by point
+4. **Subtext** — what is being implied, avoided, hinted at, or left unsaid. Read between the lines. Tone, hedging, escalation cues.
+5. **Commitments made** — by whom, what, by when (cite the words if possible)
+6. **Asks / Demands** — what is being requested of Twiney or of others
+7. **Risks / Liabilities** — operational, financial, regulatory, reputational
+8. **Key players** — anyone named, their role, and their position in the thread
+9. **Evidence / Numbers / Dates** — anything specific worth flagging
+10. **Open questions** — what is NOT answered that should be
+
+Plain prose unless lists are necessary. Be specific. Quote the email when a phrase matters.${focusClause}
+
+---
+EMAIL ${i + 1} OF ${populated.length} — "${em.label}"
+${em.text || "(no body text — see attached image/PDF)"}
+${em.files.length ? "\nATTACHED FILES: " + em.files.map(f => f.name).join(", ") : ""}
+---`;
+
+        const analysis = await callClaude({
+          prompt,
+          apiKey,
+          model,
+          source: "email-investigate-pass1",
+          images: imageAttachments.length ? imageAttachments : null,
+          maxTokens: 3000,
+        });
+        perEmailAnalyses.push({ label: em.label, analysis });
+      }
+
+      // ===== PASS 2: synthesis across all emails =====
+      setInvestigationStage("Cross-referencing all emails...");
+      const synthesisPrompt = `You are Kera. You've just analyzed ${populated.length} email thread${populated.length > 1 ? "s" : ""} individually for Twiney. Now synthesize a thorough cross-cutting investigation.
+
+You will produce a structured analysis report with these sections, in this exact order, each with a clear header:
+
+## EXECUTIVE SUMMARY
+3-5 sentences. The most important thing Twiney needs to know.
+
+## TIMELINE
+Order events chronologically across all threads. Who said what, when. Note gaps and silences.
+
+## KEY PLAYERS
+For each person involved across the emails: their role, their position, their pattern of behavior, any agendas you can infer.
+
+## WHAT IS BEING SAID (SURFACE)
+The literal content across all threads, distilled.
+
+## WHAT IS NOT BEING SAID (SUBTEXT)
+Hidden tension, avoidance patterns, power dynamics, contradictions between threads, things written carefully to avoid commitment. Be direct.
+
+## COMMITMENTS
+Every commitment made across all threads. Who, what, by when. Flag any that conflict with each other.
+
+## RISKS & LIABILITIES
+Operational, financial, regulatory, reputational. Specific to the MedStar / Crothall hospital environment.
+
+## CONFLICTS & CONTRADICTIONS
+Where do the emails contradict each other or themselves? Where do words and actions diverge?
+
+## ACTION ITEMS FOR TWINEY
+Numbered list. Each item: action, owner, urgency, why.
+
+## RECOMMENDED RESPONSE STRATEGY
+How Twiney should approach this — the order of moves, who to talk to first, what to put in writing, what to hold back. Be tactical.
+
+## QUESTIONS TWINEY SHOULD ASK BEFORE RESPONDING
+The questions whose answers would change the strategy. Make him think.
+
+Use plain prose within sections. Be exhaustive — Twiney asked you to investigate THOROUGHLY, so do not under-deliver. This is not a summary; it is a deep read.${focusClause}
+
+---
+INDIVIDUAL ANALYSES TO SYNTHESIZE:
+
+${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\n${a.analysis}`).join("\n\n")}
+---`;
+
+      const finalReport = await callClaude({
+        prompt: synthesisPrompt,
+        apiKey,
+        model,
+        source: "email-investigate-pass2",
+        maxTokens: 8000,
+      });
+
+      // Build the final composite output: individual analyses appendix + synthesis up top.
+      const composite = `# DEEP INVESTIGATION — ${populated.length} EMAIL${populated.length > 1 ? "S" : ""}\nGenerated ${new Date().toLocaleString()}\n\n${finalReport}\n\n\n---\n\n# APPENDIX: INDIVIDUAL EMAIL ANALYSES\n\n${perEmailAnalyses.map((a, i) => `## ${a.label}\n\n${a.analysis}`).join("\n\n---\n\n")}`;
+      setInvestigation(composite);
+      setInvestigationStage("");
+    } catch (e) {
+      setInvestigationError("Investigation failed: " + e.message);
+      setInvestigationStage("");
+    } finally {
+      setInvestigationLoading(false);
+    }
+  };
+
+  const clearInvestigation = () => {
+    setEmails([{ id: "e1", label: "Email 1", text: "", files: [] }]);
+    setInvestigation("");
+    setFocusQuestion("");
+    setInvestigationError("");
+  };
+
   return (
     <div style={{ padding: 22 }}>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Email Intelligence</div>
-        <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Paste any thread. Get executive-ready output.</h1>
+      <div style={{ marginBottom: 20, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Email Intelligence</div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>
+            {mode === "single" ? "Paste any thread. Get executive-ready output." :
+             mode === "investigate" ? "Investigate Thoroughly — multi-email deep analysis." :
+             "Inbox — forwarded mail from ingest@keraos.cc"}
+          </h1>
+        </div>
+        {/* Mode toggle */}
+        <div style={{ display: "flex", gap: 0, border: "1px solid " + T.border, borderRadius: 2, overflow: "hidden" }}>
+          <button
+            onClick={() => setMode("inbox")}
+            style={{
+              padding: "10px 18px", background: mode === "inbox" ? T.cyan + "22" : "transparent",
+              border: "none", borderRight: "1px solid " + T.border,
+              color: mode === "inbox" ? T.cyan : T.textDim,
+              fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", cursor: "pointer",
+            }}>Inbox</button>
+          <button
+            onClick={() => setMode("single")}
+            style={{
+              padding: "10px 18px", background: mode === "single" ? T.accent + "22" : "transparent",
+              border: "none", borderRight: "1px solid " + T.border,
+              color: mode === "single" ? T.accent : T.textDim,
+              fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", cursor: "pointer",
+            }}>Quick Action</button>
+          <button
+            onClick={() => setMode("investigate")}
+            style={{
+              padding: "10px 18px", background: mode === "investigate" ? T.brass + "22" : "transparent",
+              border: "none",
+              color: mode === "investigate" ? T.brass : T.textDim,
+              fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", cursor: "pointer",
+            }}>Investigate Thoroughly</button>
+        </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <Panel title="Source Email">
-          <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={14}
-            style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
-          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-            {actions.map(a => (
-              <Btn key={a.id} icon={a.icon} onClick={() => run(a)} disabled={!emailText.trim()} loading={loading && activeAction === a.id} full>{a.label}</Btn>
-            ))}
-          </div>
-        </Panel>
-        <Panel title="Output" accent={T.brass} action={output && (
-          <button onClick={() => navigator.clipboard?.writeText(output)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
-        )}>
-          {loading ? (
-            <div style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 12, display: "flex", alignItems: "center", gap: 8, padding: "40px 0", justifyContent: "center" }}>
-              <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={14} /></span>Processing...
+
+      {mode === "single" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Panel title="Source Email">
+            <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={14}
+              style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
+            <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+              {actions.map(a => (
+                <Btn key={a.id} icon={a.icon} onClick={() => run(a)} disabled={!emailText.trim()} loading={loading && activeAction === a.id} full>{a.label}</Btn>
+              ))}
             </div>
-          ) : output ? (
-            <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{output}</div>
-          ) : (
-            <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", padding: "40px 0", letterSpacing: 1 }}>PASTE EMAIL + PICK AN ACTION</div>
+          </Panel>
+          <Panel title="Output" accent={T.brass} action={output && (
+            <button onClick={() => navigator.clipboard?.writeText(output)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
+          )}>
+            {loading ? (
+              <div style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 12, display: "flex", alignItems: "center", gap: 8, padding: "40px 0", justifyContent: "center" }}>
+                <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={14} /></span>Processing...
+              </div>
+            ) : output ? (
+              <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{output}</div>
+            ) : (
+              <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", padding: "40px 0", letterSpacing: 1 }}>PASTE EMAIL + PICK AN ACTION</div>
+            )}
+          </Panel>
+        </div>
+      )}
+
+      {mode === "investigate" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Intro / instructions strip */}
+          <div style={{ background: T.brass + "11", border: "1px solid " + T.brass + "33", borderRadius: 2, padding: "12px 16px", color: T.textDim, fontSize: 13, lineHeight: 1.6 }}>
+            <span style={{ color: T.brass, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.6, textTransform: "uppercase", marginRight: 8 }}>How this works</span>
+            Add multiple emails — paste text, upload <code style={{ background: T.bgSunken, padding: "1px 5px", borderRadius: 2, fontSize: 12 }}>.txt</code>, <code style={{ background: T.bgSunken, padding: "1px 5px", borderRadius: 2, fontSize: 12 }}>.eml</code>, PDFs, or screenshots. Kera reads each one individually, then synthesizes a deep cross-cutting analysis: timeline, key players, what's said, what's NOT said, commitments, contradictions, risks, action items, and recommended strategy.
+          </div>
+
+          {/* Email cards */}
+          {emails.map((em, idx) => (
+            <Panel
+              key={em.id}
+              title={em.label}
+              subtitle={`${em.text.length.toLocaleString()} chars · ${em.files.length} attachment${em.files.length === 1 ? "" : "s"}`}
+              action={emails.length > 1 && (
+                <button onClick={() => removeEmail(em.id)} style={{ background: "transparent", border: "none", color: T.red, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>REMOVE</button>
+              )}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <input
+                  type="text"
+                  value={em.label}
+                  onChange={e => updateEmail(em.id, { label: e.target.value })}
+                  placeholder="Label this email (sender / topic / date)"
+                  style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 2, width: "100%" }}
+                />
+                <textarea
+                  value={em.text}
+                  onChange={e => updateEmail(em.id, { text: e.target.value })}
+                  placeholder="Paste email body here — include headers (From, To, Date, Subject) if available..."
+                  rows={8}
+                  style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }}
+                />
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", background: T.bgSunken, border: "1px dashed " + T.border, borderRadius: 2, cursor: "pointer", color: T.textDim, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.2 }}>
+                    <Icon name="file" size={12} />
+                    UPLOAD FILES
+                    <input
+                      type="file"
+                      multiple
+                      accept=".txt,.eml,.msg,.csv,.json,.md,.log,.html,.pdf,image/*"
+                      onChange={e => { handleEmailFiles(em.id, e.target.files); e.target.value = ""; }}
+                      style={{ display: "none" }}
+                    />
+                  </label>
+                  <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10 }}>.txt, .eml, .msg, .pdf, screenshots</span>
+                </div>
+                {em.files.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                    {em.files.map((f, i) => (
+                      <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, color: T.text, fontFamily: FF.mono, fontSize: 11 }}>
+                        <Icon name="file" size={11} />
+                        <span style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                        <button onClick={() => removeFile(em.id, i)} style={{ background: "transparent", border: "none", color: T.textFaint, fontSize: 14, cursor: "pointer", padding: 0, lineHeight: 1 }} title="Remove">×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Panel>
+          ))}
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Btn icon="arrow" onClick={addEmail} variant="ghost">Add Another Email</Btn>
+            <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1 }}>· {emails.length} email{emails.length === 1 ? "" : "s"} loaded</span>
+          </div>
+
+          {/* Focus question */}
+          <Panel title="Focus Question (optional)" subtitle="Anything specific you want Kera to focus on">
+            <input
+              type="text"
+              value={focusQuestion}
+              onChange={e => setFocusQuestion(e.target.value)}
+              placeholder="e.g. 'Is Vendor X positioning to back out?' or 'Who's blocking this and why?'"
+              style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 14px", borderRadius: 2, width: "100%" }}
+            />
+          </Panel>
+
+          {/* Run controls */}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Btn icon="spark" variant="primary" onClick={runInvestigation} loading={investigationLoading} disabled={investigationLoading}>
+              {investigationLoading ? (investigationStage || "Investigating...") : "Run Deep Investigation"}
+            </Btn>
+            <Btn icon="trash" variant="ghost" onClick={clearInvestigation} disabled={investigationLoading}>Reset</Btn>
+            {investigationError && (
+              <span style={{ color: T.red, fontFamily: FF.mono, fontSize: 11 }}>{investigationError}</span>
+            )}
+          </div>
+
+          {/* Report output */}
+          {(investigationLoading || investigation) && (
+            <Panel title="Investigation Report" accent={T.brass} action={investigation && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => navigator.clipboard?.writeText(investigation)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
+                <button onClick={() => {
+                  const blob = new Blob([investigation], { type: "text/markdown" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "investigation-" + new Date().toISOString().slice(0, 10) + ".md";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>DOWNLOAD</button>
+              </div>
+            )}>
+              {investigationLoading ? (
+                <div style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "60px 0" }}>
+                  <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={18} /></span>
+                  <span>{investigationStage || "Working..."}</span>
+                  <span style={{ color: T.textFaint, fontSize: 10, letterSpacing: 1, textAlign: "center", maxWidth: 320, lineHeight: 1.5 }}>
+                    {emails.filter(e => e.text.trim() || e.files.length).length} email{emails.filter(e => e.text.trim() || e.files.length).length === 1 ? "" : "s"} · two-pass deep read · this can take 30-90 seconds
+                  </span>
+                </div>
+              ) : (
+                <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.75, whiteSpace: "pre-wrap", maxHeight: 720, overflowY: "auto" }}>{investigation}</div>
+              )}
+            </Panel>
           )}
-        </Panel>
-      </div>
+        </div>
+      )}
+
+      {mode === "inbox" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Intro / how-this-works strip */}
+          <div style={{ background: T.cyan + "11", border: "1px solid " + T.cyan + "33", borderRadius: 2, padding: "12px 16px", color: T.textDim, fontSize: 13, lineHeight: 1.6 }}>
+            <span style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.6, textTransform: "uppercase", marginRight: 8 }}>How this works</span>
+            Forward work emails to <code style={{ background: T.bgSunken, padding: "2px 6px", borderRadius: 2, color: T.text, fontSize: 12 }}>ingest@keraos.cc</code>. They land here within a minute. Each row supports auto-extraction (Kera pulls sites, vendors, equipment, action items, commitments), pinning, archiving, marking as a verified source, sending to the review queue, and one-click drafting of replies / tasks.
+          </div>
+
+          {/* Controls bar */}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Btn icon="load" onClick={() => refreshInbox()} loading={inboxLoading} disabled={inboxLoading} variant="ghost">Refresh</Btn>
+            <input
+              type="search"
+              value={inboxSearch}
+              onChange={e => setInboxSearch(e.target.value)}
+              placeholder="Search subject, sender, body..."
+              style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 2, minWidth: 280, flex: "1 1 280px", maxWidth: 480 }}
+            />
+            {inboxFetchedAt > 0 && (
+              <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1 }}>
+                Updated {Math.floor((Date.now() - inboxFetchedAt) / 1000)}s ago · {visibleInbox.length} of {inbox.length}
+              </span>
+            )}
+          </div>
+
+          {/* Filter chips */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {[
+              { id: "all", label: "All", n: inbox.length },
+              { id: "unread", label: "Active", n: inbox.filter(e => !e.archived).length },
+              { id: "pinned", label: "Pinned", n: inbox.filter(e => e.pinned).length },
+              { id: "verified", label: "Verified", n: inbox.filter(e => e.verified_source).length },
+              { id: "review", label: "Review Queue", n: inbox.filter(e => e.in_review_queue).length },
+            ].map(f => (
+              <button key={f.id} onClick={() => setInboxFilter(f.id)}
+                style={{
+                  padding: "5px 12px",
+                  background: inboxFilter === f.id ? T.cyan + "22" : "transparent",
+                  border: "1px solid " + (inboxFilter === f.id ? T.cyan : T.borderFaint),
+                  color: inboxFilter === f.id ? T.cyan : T.textDim,
+                  fontFamily: FF.mono, fontSize: 11, letterSpacing: 1, cursor: "pointer", borderRadius: 2,
+                }}>
+                {f.label} <span style={{ color: T.textFaint, marginLeft: 6 }}>{f.n}</span>
+              </button>
+            ))}
+            <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1, marginLeft: 12 }}>SITE</span>
+            <select value={inboxSiteFilter} onChange={e => setInboxSiteFilter(e.target.value)}
+              style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 11, padding: "4px 8px", borderRadius: 2 }}>
+              <option value="">All</option>
+              {["MWHC","MGUH","MMMC","MUMH","MHH","MGSH","MSMHC","MSMH","MNRH","MFSHC"].map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          {/* Error */}
+          {inboxError && (
+            <div style={{ background: T.red + "11", border: "1px solid " + T.red + "33", color: T.red, padding: "10px 14px", borderRadius: 2, fontFamily: FF.mono, fontSize: 11 }}>
+              {inboxError}
+            </div>
+          )}
+
+          {/* Empty state vs list */}
+          {!inboxLoading && visibleInbox.length === 0 && (
+            <Panel title={inbox.length === 0 ? "Inbox Empty" : "No matches"}>
+              <div style={{ color: T.textDim, fontSize: 13, lineHeight: 1.7, padding: "20px 0" }}>
+                {inbox.length === 0 ? (
+                  <>
+                    <p>No forwarded emails received yet. Forward any work email (vendor updates, project notes, outage notifications, blueprints, equipment data) to <code style={{ background: T.bgSunken, padding: "2px 6px", borderRadius: 2, color: T.text }}>ingest@keraos.cc</code>.</p>
+                    <p style={{ marginTop: 12 }}>The first email may take 30-60 seconds to appear on initial DNS setup. Subsequent emails arrive in under 10 seconds.</p>
+                  </>
+                ) : "No emails match the current filter. Try changing the filter or clearing the search."}
+              </div>
+            </Panel>
+          )}
+
+          {/* Email list — table-style for density */}
+          {visibleInbox.length > 0 && (
+            <Panel title="Forwarded Mail" noPad>
+              <div style={{ maxHeight: 600, overflowY: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: FF.body }}>
+                  <thead style={{ position: "sticky", top: 0, background: T.bgRaised, zIndex: 1 }}>
+                    <tr style={{ borderBottom: "1px solid " + T.border }}>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, fontWeight: 500, width: 32 }}></th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, fontWeight: 500 }}>FROM</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, fontWeight: 500 }}>SUBJECT</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, fontWeight: 500, width: 120 }}>TAGS</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, fontWeight: 500, width: 130 }}>RECEIVED</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleInbox.map(em => {
+                      const ex = (em.extraction && em.extraction[0]) || {};
+                      const tags = [];
+                      if (ex.urgency === "critical") tags.push({ label: "CRITICAL", color: T.red });
+                      else if (ex.urgency === "high") tags.push({ label: "HIGH", color: T.amber });
+                      if (em.verified_source) tags.push({ label: "VERIFIED", color: T.green });
+                      if (em.in_review_queue) tags.push({ label: "REVIEW", color: T.brass });
+                      const sites = ex.sites || [];
+                      return (
+                        <tr key={em.id} onClick={() => { setActiveInboxId(em.id); setInboxAiOutput(""); }}
+                          style={{ borderBottom: "1px solid " + T.borderFaint, cursor: "pointer", background: activeInboxId === em.id ? T.bgSunken : "transparent" }}>
+                          <td style={{ padding: "10px 12px" }}>
+                            <span style={{ color: em.pinned ? T.amber : T.textFaint, fontSize: 14 }}>{em.pinned ? "★" : "·"}</span>
+                          </td>
+                          <td style={{ padding: "10px 12px", color: T.text, fontSize: 13 }}>
+                            <div style={{ fontWeight: 500 }}>{em.from_name || em.from_addr || em.original_from || "—"}</div>
+                            {em.original_from && em.original_from !== em.from_addr && (
+                              <div style={{ color: T.textFaint, fontSize: 11, marginTop: 2 }}>orig: {em.original_from}</div>
+                            )}
+                          </td>
+                          <td style={{ padding: "10px 12px", color: T.text, fontSize: 13 }}>
+                            <div style={{ fontWeight: 400 }}>{em.subject || "(no subject)"}</div>
+                            {ex.summary && (
+                              <div style={{ color: T.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 600 }}>{ex.summary}</div>
+                            )}
+                            {em.attachments && em.attachments.length > 0 && (
+                              <div style={{ color: T.cyan, fontSize: 10, fontFamily: FF.mono, marginTop: 3, letterSpacing: 1 }}>
+                                📎 {em.attachments.length} ATTACHMENT{em.attachments.length === 1 ? "" : "S"}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              {tags.map((t, i) => <span key={i} style={{ color: t.color, fontFamily: FF.mono, fontSize: 9, letterSpacing: 1, padding: "2px 5px", border: "1px solid " + t.color + "55", borderRadius: 2, display: "inline-block", width: "fit-content" }}>{t.label}</span>)}
+                              {sites.slice(0, 2).map((s, i) => <span key={i} style={{ color: T.accent, fontFamily: FF.mono, fontSize: 9, letterSpacing: 1 }}>{s}</span>)}
+                            </div>
+                          </td>
+                          <td style={{ padding: "10px 12px", color: T.textDim, fontSize: 11, fontFamily: FF.mono, textAlign: "right" }}>
+                            {em.received_at ? new Date(em.received_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          )}
+
+          {/* Detail panel for the active inbox email */}
+          {activeInboxEmail && (
+            <Panel
+              title="Email Detail"
+              accent={T.cyan}
+              action={
+                <button onClick={() => { setActiveInboxId(null); setInboxAiOutput(""); }}
+                  style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 11, cursor: "pointer", letterSpacing: 1.2 }}>CLOSE ×</button>
+              }
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18 }}>
+                {/* Body column */}
+                <div>
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ ...TS.h3, color: T.text, marginBottom: 6 }}>{activeInboxEmail.subject || "(no subject)"}</div>
+                    <div style={{ color: T.textDim, fontFamily: FF.mono, fontSize: 11, lineHeight: 1.7 }}>
+                      <div>From: <span style={{ color: T.text }}>{activeInboxEmail.from_name ? `${activeInboxEmail.from_name} <${activeInboxEmail.from_addr}>` : activeInboxEmail.from_addr}</span></div>
+                      {activeInboxEmail.original_from && activeInboxEmail.original_from !== activeInboxEmail.from_addr && (
+                        <div>Originally from: <span style={{ color: T.amber }}>{activeInboxEmail.original_from}</span></div>
+                      )}
+                      <div>To: <span style={{ color: T.text }}>{activeInboxEmail.to_addr}</span></div>
+                      <div>Received: <span style={{ color: T.text }}>{activeInboxEmail.received_at ? new Date(activeInboxEmail.received_at).toLocaleString() : "—"}</span></div>
+                    </div>
+                  </div>
+
+                  {/* Body */}
+                  <div style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, padding: 14, fontFamily: FF.mono, fontSize: 12, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 380, overflowY: "auto" }}>
+                    {activeInboxEmail.text_body || "(no plain-text body)"}
+                  </div>
+
+                  {/* Attachments */}
+                  {activeInboxEmail.attachments && activeInboxEmail.attachments.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
+                      <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, marginBottom: 8 }}>ATTACHMENTS</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {activeInboxEmail.attachments.map(a => (
+                          <div key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, color: T.text, fontFamily: FF.mono, fontSize: 11 }}>
+                            <Icon name="file" size={11} />
+                            <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.filename}</span>
+                            <span style={{ color: T.textFaint, fontSize: 10 }}>{a.size_bytes ? Math.round(a.size_bytes/1024) + "KB" : ""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Extraction display */}
+                  {activeInboxEmail.extraction && activeInboxEmail.extraction[0] && (
+                    <div style={{ marginTop: 14, background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, padding: 14 }}>
+                      <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.brass, letterSpacing: 1.4, marginBottom: 10 }}>KERA INTEL</div>
+                      {(() => {
+                        const ex = activeInboxEmail.extraction[0];
+                        const Field = ({ label, value }) => {
+                          if (!value || (Array.isArray(value) && value.length === 0)) return null;
+                          return (
+                            <div style={{ marginBottom: 8, fontSize: 12, lineHeight: 1.6 }}>
+                              <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1, marginRight: 8 }}>{label}</span>
+                              <span style={{ color: T.text }}>{Array.isArray(value) ? value.join(", ") : value}</span>
+                            </div>
+                          );
+                        };
+                        return (
+                          <div>
+                            <Field label="TOPIC" value={ex.topic} />
+                            <Field label="URGENCY" value={ex.urgency} />
+                            <Field label="CATEGORY" value={ex.category} />
+                            <Field label="SITES" value={ex.sites} />
+                            <Field label="VENDORS" value={ex.vendors} />
+                            <Field label="EQUIPMENT" value={ex.equipment} />
+                            <Field label="ROOMS" value={ex.rooms} />
+                            <Field label="PROJECTS" value={ex.projects} />
+                            <Field label="SYSTEMS" value={ex.systems} />
+                            <Field label="PEOPLE" value={ex.people} />
+                            {ex.summary && (
+                              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid " + T.borderFaint, color: T.text, fontSize: 13, lineHeight: 1.6 }}>{ex.summary}</div>
+                            )}
+                            {Array.isArray(ex.action_items) && ex.action_items.length > 0 && (
+                              <div style={{ marginTop: 10 }}>
+                                <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1, marginBottom: 4 }}>ACTION ITEMS</div>
+                                {ex.action_items.map((a, i) => (
+                                  <div key={i} style={{ color: T.text, fontSize: 12, lineHeight: 1.6, marginLeft: 8 }}>
+                                    {i + 1}. <b>{a.who || "?"}</b>: {a.what} {a.by_when ? <span style={{ color: T.textDim }}>· by {a.by_when}</span> : null}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Kera output area */}
+                  {(inboxAiBusy || inboxAiOutput) && (
+                    <div style={{ marginTop: 14, background: T.bgSunken, border: "1px solid " + T.brass + "33", borderRadius: 2, padding: 14 }}>
+                      <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.brass, letterSpacing: 1.4, marginBottom: 8 }}>KERA OUTPUT</div>
+                      {inboxAiBusy ? (
+                        <div style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                          <span className="spin" style={{display:"inline-flex"}}><Icon name="load" size={14} /></span>
+                          Working...
+                        </div>
+                      ) : (
+                        <div style={{ color: T.text, fontFamily: FF.body, fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{inboxAiOutput}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Action column */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, marginBottom: 4 }}>KERA ACTIONS</div>
+                  {INBOX_AI_ACTIONS.map(a => (
+                    <Btn key={a.id} icon={a.icon} onClick={() => runInboxAi(a, activeInboxEmail)} loading={inboxAiBusy === a.id} disabled={!!inboxAiBusy} full>{a.label}</Btn>
+                  ))}
+
+                  <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, marginTop: 14, marginBottom: 4 }}>STATUS</div>
+                  <Btn icon={activeInboxEmail.pinned ? "spark" : "spark"} onClick={() => patchInboxEmail(activeInboxEmail.id, { pinned: !activeInboxEmail.pinned })} variant="ghost" full>
+                    {activeInboxEmail.pinned ? "★ Unpin" : "☆ Pin"}
+                  </Btn>
+                  <Btn icon="check" onClick={() => patchInboxEmail(activeInboxEmail.id, { verified_source: !activeInboxEmail.verified_source })} variant={activeInboxEmail.verified_source ? "primary" : "ghost"} full>
+                    {activeInboxEmail.verified_source ? "Verified Source ✓" : "Mark as Verified Source"}
+                  </Btn>
+                  <Btn icon="alert" onClick={() => patchInboxEmail(activeInboxEmail.id, { in_review_queue: !activeInboxEmail.in_review_queue })} variant={activeInboxEmail.in_review_queue ? "primary" : "ghost"} full>
+                    {activeInboxEmail.in_review_queue ? "In Review Queue" : "Send to Review Queue"}
+                  </Btn>
+                  <Btn icon="trash" onClick={() => { patchInboxEmail(activeInboxEmail.id, { archived: !activeInboxEmail.archived }); setActiveInboxId(null); }} variant="ghost" full>
+                    {activeInboxEmail.archived ? "Unarchive" : "Archive"}
+                  </Btn>
+
+                  <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4, marginTop: 14, marginBottom: 4 }}>NOTES</div>
+                  <textarea
+                    value={activeInboxEmail.user_notes || ""}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setInbox(prev => prev.map(x => x.id === activeInboxEmail.id ? { ...x, user_notes: v } : x));
+                    }}
+                    onBlur={e => patchInboxEmail(activeInboxEmail.id, { user_notes: e.target.value })}
+                    placeholder="Your notes on this email..."
+                    rows={4}
+                    style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 11, padding: 10, borderRadius: 2, resize: "vertical", lineHeight: 1.5 }}
+                  />
+                </div>
+              </div>
+            </Panel>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -2769,6 +3913,12 @@ const RecordingsView = ({ apiKey, model }) => {
   const [activeId, setActiveId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Close detail view on global Escape
+  useEffect(() => {
+    const onEscape = () => { setActiveId(null); setDetail(null); };
+    window.addEventListener("execos:escape", onEscape);
+    return () => window.removeEventListener("execos:escape", onEscape);
+  }, []);
   // Setup screen only shows if there's no saved URL AND no default. With defaults
   // baked in, this is effectively never — the list view loads immediately.
   const [editingApi, setEditingApi] = useState(!LS.get("plaud_api_base", "") && !EXEC_OS_DEFAULTS.plaudListUrl);
@@ -4267,20 +5417,30 @@ const HelpView = () => {
       id: "email",
       title: "Email Intel — Process Threads",
       icon: "mail",
-      tags: "email intel summarize draft firm escalate commitments",
+      tags: "email intel summarize draft firm escalate commitments investigate thoroughly multi-email deep analysis upload eml pdf attachment subtext",
       body: (
         <div>
-          <p>Paste any email thread (or just one email) and choose what to do with it. One click each.</p>
-          <p style={{ marginTop: 12 }}><b>Six actions:</b></p>
+          <p>Two modes, toggle in the top-right of the Email Intel screen.</p>
+          <p style={{ marginTop: 12 }}><b style={{ color: T.accent }}>QUICK ACTION</b> — paste one thread, pick one of six actions:</p>
           <ul>
             <li><b>Summarize:</b> 3-line briefing — what they said, what they want, what you owe.</li>
-            <li><b>Draft Reply:</b> writes a response in your voice. Direct, technically precise, no fluff.</li>
+            <li><b>Draft Reply:</b> response in your voice. Direct, technically precise, no fluff.</li>
             <li><b>Firm Reply:</b> when a vendor's dragging. Holds the line.</li>
             <li><b>Escalate:</b> drafts a notification up the chain (Heather, Chris, Nick).</li>
-            <li><b>Action List:</b> extracts everything action-able into a clean checklist.</li>
-            <li><b>Commitments:</b> who promised what, by when. Catches things buried in long threads.</li>
+            <li><b>Action List:</b> extracts everything actionable into a clean checklist.</li>
+            <li><b>Commitments:</b> who promised what, by when.</li>
           </ul>
-          <p style={{ marginTop: 12, color: T.textDim, fontStyle: "italic" }}>Gmail/Outlook OAuth integration is on the roadmap — currently paste-driven.</p>
+          <p style={{ marginTop: 14 }}><b style={{ color: T.brass }}>INVESTIGATE THOROUGHLY</b> — multi-email deep analysis. Use this when emails are connected and you need to see the whole picture.</p>
+          <ul>
+            <li>Add multiple emails — paste text into each card, or upload <b>.txt, .eml, .msg, .pdf,</b> or screenshots. Kera reads PDFs and images natively.</li>
+            <li>Optional <b>Focus Question</b> — tell Kera what you specifically want to know (e.g. "Is Vendor X positioning to back out?").</li>
+            <li>Click <b>Run Deep Investigation</b>. Kera does a two-pass read: each email analyzed individually, then a cross-cutting synthesis.</li>
+            <li>Output is a structured report: Executive Summary, Timeline, Key Players, Surface Content, <b>Subtext (what's NOT being said)</b>, Commitments, Risks, Conflicts & Contradictions, Action Items, Recommended Strategy, Questions to Ask Before Responding.</li>
+            <li>Plus an Appendix with each individual email's analysis.</li>
+            <li>Copy the report to clipboard or Download as Markdown.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.textDim, fontStyle: "italic" }}>Deep investigation takes 30-90 seconds depending on how many emails you've loaded. Burns more API tokens than Quick Action — use it when the stakes warrant it.</p>
+          <p style={{ marginTop: 8, color: T.textDim, fontStyle: "italic" }}>Gmail/Outlook OAuth integration is on the roadmap — currently paste/upload driven.</p>
         </div>
       ),
     },
@@ -4860,7 +6020,13 @@ const App = () => {
   useEffect(() => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setPalette(p => !p); }
-      if (e.key === "Escape") { setPalette(false); }
+      if (e.key === "Escape") {
+        setPalette(false);
+        setSettings(false);
+        // Also dispatch a window event so any open detail panels (Recordings detail,
+        // Dashboard task detail, etc.) can listen and close themselves.
+        window.dispatchEvent(new Event("execos:escape"));
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -4876,7 +6042,7 @@ const App = () => {
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <Sidebar active={view} onChange={setView} />
         <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-          {view === "dashboard" && <Dashboard onJump={setView} />}
+          {view === "dashboard" && <Dashboard onJump={setView} apiKey={apiKey} model={model} />}
           {view === "terminal" && <TerminalView apiKey={apiKey} model={model} />}
           {view === "sites" && <SitesView apiKey={apiKey} model={model} />}
           {view === "recordings" && <RecordingsView apiKey={apiKey} model={model} />}
