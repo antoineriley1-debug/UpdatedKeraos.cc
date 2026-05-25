@@ -1671,7 +1671,79 @@ const Dashboard = ({ onJump, apiKey, model }) => {
             </span>
           )}
           <Btn icon="load" onClick={() => setRefreshTick(x => x + 1)} size="sm" variant="ghost">Refresh</Btn>
-          <Btn icon="spark" variant="primary" size="sm" onClick={() => onJump("terminal")}>Brief Me</Btn>
+          <Btn icon="spark" variant="primary" size="sm" onClick={() => {
+            // Build the daily briefing context from current state
+            const now = new Date();
+            const dateStr = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+            const isDone = (s) => /complete|done|closed/i.test(s || "");
+            const openTasks = (tasks || []).filter(t => !isDone(t.status));
+            const overdueT = openTasks.filter(t => {
+              if (!t.dueDate) return false;
+              try { return new Date(t.dueDate) < new Date(now.toDateString()); } catch { return false; }
+            });
+            const myTasks = openTasks.filter(t => /antoine|riley|twiney/i.test(t.owner || ""));
+            const topPriority = openTasks
+              .filter(t => /high|urgent|critical|p1|p2/i.test(t.priority || ""))
+              .slice(0, 8);
+
+            const alertSites = (sites || []).filter(s => s.status === "alert");
+            const watchSites = (sites || []).filter(s => s.status === "watch");
+
+            const recentErrors = (audit || [])
+              .filter(a => a.status === "error" && (Date.now() - new Date(a.ts).getTime()) < 86400000)
+              .slice(0, 3);
+
+            const ctxLines = [
+              `Today is ${dateStr}. Give Twiney his daily executive briefing.`,
+              ``,
+              `OPERATIONAL SNAPSHOT:`,
+              `- Open tasks: ${kpis.openTasks} (of ${tasks.length} total)`,
+              `- Overdue: ${kpis.overdue}`,
+              `- Blocked: ${kpis.blocked}`,
+              `- Assigned to me: ${kpis.mine}`,
+              `- Closed this week: ${kpis.completedThisWeek}`,
+              `- Sites on ALERT: ${kpis.alertSites}`,
+              `- Sites on WATCH: ${kpis.watchSites}`,
+            ];
+
+            if (alertSites.length) {
+              ctxLines.push(``, `SITES ON ALERT:`);
+              alertSites.forEach(s => ctxLines.push(`- ${s.code}: ${s.name || ""} ${s.lastIssue ? "— " + s.lastIssue : ""}`));
+            }
+            if (watchSites.length) {
+              ctxLines.push(``, `SITES ON WATCH:`);
+              watchSites.forEach(s => ctxLines.push(`- ${s.code}: ${s.name || ""} ${s.lastIssue ? "— " + s.lastIssue : ""}`));
+            }
+
+            if (overdueT.length) {
+              ctxLines.push(``, `OVERDUE TASKS (${overdueT.length}):`);
+              overdueT.slice(0, 8).forEach(t => {
+                ctxLines.push(`- ${t.task} | site: ${t.site || "—"} | due: ${t.dueDate || "—"} | owner: ${t.owner || "—"}`);
+              });
+            }
+
+            if (topPriority.length) {
+              ctxLines.push(``, `HIGH/URGENT OPEN TASKS:`);
+              topPriority.forEach(t => {
+                ctxLines.push(`- ${t.task} | site: ${t.site || "—"} | due: ${t.dueDate || "—"} | status: ${t.status || "—"}`);
+              });
+            }
+
+            if (recentErrors.length) {
+              ctxLines.push(``, `RECENT AI CALL ERRORS (24h):`);
+              recentErrors.forEach(e => ctxLines.push(`- ${e.source}: ${(e.error || "").slice(0, 100)}`));
+            }
+
+            ctxLines.push(``,
+              `Brief Twiney in plain executive prose. Lead with what changed since yesterday and what's at risk today. ` +
+              `End with the top 3 things he should personally action today. Match his voice — direct, technically precise, no hyphens as structure, no unnecessary bullets unless there's a real list.`
+            );
+
+            const briefingPrompt = ctxLines.join("\n");
+            LS.set("terminal_prefill", briefingPrompt);
+            LS.set("terminal_autosend", true);
+            onJump("terminal");
+          }}>Brief Me</Btn>
         </div>
       </div>
 
@@ -2178,6 +2250,17 @@ const TerminalView = ({ apiKey, model }) => {
 
   // Keep a ref so Convo callbacks (created once) call the latest send
   useEffect(() => { sendRef.current = send; }, [send]);
+
+  // Auto-send on mount when arriving from a "Brief Me"-style action.
+  // Other views set terminal_prefill + terminal_autosend to push a prompt AND fire it.
+  useEffect(() => {
+    if (!LS.get("terminal_autosend", false)) return;
+    LS.set("terminal_autosend", false);
+    try { localStorage.removeItem("execos:terminal_autosend"); } catch {}
+    // Tiny delay so input state from useState initializer is settled and apiKey is ready
+    const t = setTimeout(() => { sendRef.current?.(); }, 100);
+    return () => clearTimeout(t);
+  }, []);
 
   // Wire Convo callbacks once
   useEffect(() => {
