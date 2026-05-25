@@ -753,6 +753,7 @@ const Sidebar = ({ active, onChange }) => {
     { id: "recordings", label: "Recordings", icon: "mic" },
     { id: "focus", label: "Focus OS", icon: "brain" },
     { id: "email", label: "Email Intel", icon: "mail" },
+    { id: "contracts", label: "Contracts", icon: "key" },
     { id: "reports", label: "Reports", icon: "file" },
     { id: "memory", label: "Memory", icon: "brain" },
     { id: "notes", label: "Notes", icon: "file" },
@@ -763,7 +764,7 @@ const Sidebar = ({ active, onChange }) => {
   // Group by section
   const groups = [
     { name: "Operations", ids: ["dashboard", "terminal", "sites", "recordings"] },
-    { name: "Workflows",  ids: ["focus", "email", "reports"] },
+    { name: "Workflows",  ids: ["focus", "email", "contracts", "reports"] },
     { name: "Knowledge",  ids: ["memory", "notes", "audit"] },
     { name: "System",     ids: ["theme", "help"] },
   ];
@@ -2152,6 +2153,11 @@ const EmailView = ({ apiKey, model }) => {
   const [output, setOutput] = useState("");
   const [loading, setLoading] = useState(false);
   const [activeAction, setActiveAction] = useState("");
+  // Quick Action file uploads — same file types as Investigate Thoroughly.
+  // Text files (.txt/.eml/.msg) get appended into the email body. Images and PDFs become attachments
+  // that flow into the API call as Claude vision blocks.
+  const [quickFiles, setQuickFiles] = useState([]);
+  const [quickFileError, setQuickFileError] = useState("");
 
   // -- Investigate Thoroughly state --
   // Each email in `emails` is { id, label, text, files: [{name, mediaType, data, dataUrl, kind}] }
@@ -2416,12 +2422,60 @@ ${em.text_body || em.html_body || ""}`;
     { id:"commitments", label:"Commitments", icon:"check", prompt: e => `Extract every commitment made in this email thread — by whom, what, by when. Then flag any that look at risk.\n\n---\n${e}` },
   ];
   const run = async (a) => {
-    if (!emailText.trim() || loading) return;
+    // Either typed text OR attached files (or both) must be present.
+    const hasText = emailText.trim().length > 0;
+    const hasFiles = quickFiles.length > 0;
+    if ((!hasText && !hasFiles) || loading) return;
     setActiveAction(a.id); setLoading(true); setOutput("");
-    try { setOutput(await callClaude({ prompt: a.prompt(emailText), apiKey, model })); }
+    try {
+      // Build the prompt body. Text comes first; if there are no typed words but files
+      // are present, point the model directly at the attachment.
+      let promptBody = emailText;
+      if (!hasText && hasFiles) {
+        promptBody = "(No pasted text — read the attached file(s) as the email source.)";
+      } else if (hasFiles) {
+        promptBody = emailText + "\n\n[Note: " + quickFiles.length + " file(s) attached. Treat them as part of the email source: " + quickFiles.map(f => f.name).join(", ") + "]";
+      }
+      // Image/PDF attachments flow to Claude as vision blocks via the images param.
+      const visionAttachments = quickFiles.filter(f => f.kind === "image" || f.kind === "pdf");
+      setOutput(await callClaude({
+        prompt: a.prompt(promptBody),
+        apiKey,
+        model,
+        source: "email-quick-" + a.id,
+        images: visionAttachments.length ? visionAttachments : null,
+        maxTokens: 2048,
+      }));
+    }
     catch (e) { setOutput("Error: " + e.message); }
     finally { setLoading(false); }
   };
+  // Process file uploads for Quick Action. Text files (.txt/.eml/.msg/.csv/.md)
+  // get folded into the email body. Images and PDFs become vision attachments.
+  const handleQuickFiles = async (fileList) => {
+    setQuickFileError("");
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    try {
+      const processed = await Promise.all(files.map(readFile));
+      let appendText = "";
+      const nextFiles = [...quickFiles];
+      for (const p of processed) {
+        if (p.kind === "text") {
+          appendText += (appendText ? "\n\n---\n" : "") + "[Attached file: " + p.name + "]\n" + p.text;
+        } else {
+          nextFiles.push(p);
+        }
+      }
+      if (appendText) {
+        setEmailText(prev => (prev ? prev + "\n\n---\n" : "") + appendText);
+      }
+      setQuickFiles(nextFiles);
+    } catch (err) {
+      setQuickFileError(err.message || "File read failed.");
+    }
+  };
+  const removeQuickFile = (idx) => setQuickFiles(prev => prev.filter((_, i) => i !== idx));
 
   // ---- Investigate Thoroughly helpers ----
 
@@ -2692,12 +2746,45 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
 
       {mode === "single" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Panel title="Source Email">
-            <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={14}
+          <Panel title="Source Email" subtitle={quickFiles.length > 0 ? `${quickFiles.length} attachment${quickFiles.length === 1 ? "" : "s"}` : null}>
+            <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={12}
               style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
+
+            {/* File upload row */}
+            <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", background: T.bgSunken, border: "1px dashed " + T.border, borderRadius: 2, cursor: "pointer", color: T.textDim, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.2 }}>
+                <Icon name="file" size={12} />
+                UPLOAD FILES
+                <input
+                  type="file"
+                  multiple
+                  accept=".txt,.eml,.msg,.csv,.json,.md,.log,.html,.pdf,image/*"
+                  onChange={e => { handleQuickFiles(e.target.files); e.target.value = ""; }}
+                  style={{ display: "none" }}
+                />
+              </label>
+              <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10 }}>.txt, .eml, .msg, .pdf, screenshots</span>
+              {quickFileError && (
+                <span style={{ color: T.red, fontFamily: FF.mono, fontSize: 10 }}>{quickFileError}</span>
+              )}
+            </div>
+
+            {/* Attached file chips */}
+            {quickFiles.length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {quickFiles.map((f, i) => (
+                  <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, color: T.text, fontFamily: FF.mono, fontSize: 11 }}>
+                    <Icon name="file" size={11} />
+                    <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                    <button onClick={() => removeQuickFile(i)} style={{ background: "transparent", border: "none", color: T.textFaint, fontSize: 14, cursor: "pointer", padding: 0, lineHeight: 1 }} title="Remove">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
               {actions.map(a => (
-                <Btn key={a.id} icon={a.icon} onClick={() => run(a)} disabled={!emailText.trim()} loading={loading && activeAction === a.id} full>{a.label}</Btn>
+                <Btn key={a.id} icon={a.icon} onClick={() => run(a)} disabled={!emailText.trim() && quickFiles.length === 0} loading={loading && activeAction === a.id} full>{a.label}</Btn>
               ))}
             </div>
           </Panel>
@@ -2711,7 +2798,7 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
             ) : output ? (
               <div style={{ fontFamily: FF.body, fontSize: 14, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{output}</div>
             ) : (
-              <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", padding: "40px 0", letterSpacing: 1 }}>PASTE EMAIL + PICK AN ACTION</div>
+              <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", padding: "40px 0", letterSpacing: 1 }}>PASTE EMAIL OR UPLOAD FILES, THEN PICK AN ACTION</div>
             )}
           </Panel>
         </div>
@@ -3127,6 +3214,685 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
   );
 };
 
+// ============================================================
+// CONTRACTS — seasoned-attorney contract investigator.
+// Reads contracts (paste, .txt/.eml/.md, or .pdf/image vision) and runs
+// a deep attorney-grade investigation: red flags, indemnification, IP,
+// auto-renewal, liability caps, jurisdiction, scope ambiguity, payment
+// terms, termination, warranties, force majeure, dispute resolution.
+//
+// "Gets smarter with use" mechanics:
+// - Every investigation saved with vendor, title, date, key findings, notes
+// - On new investigation, prior contracts from the SAME vendor are injected as
+//   context so Kera applies pattern recognition across the relationship
+// - "Lessons Learned" array gets auto-extracted and accumulated — recurring
+//   red flags Twiney has flagged before bubble up automatically next time
+// - Search across the entire history (vendor, title, body, findings)
+// - User corrections (Twiney pushing back on a finding) feed back into the
+//   knowledge file as USER VERIFIED so future investigations weight them
+// ============================================================
+const ContractsView = ({ apiKey, model }) => {
+  // ---- persisted state ----
+  const [investigations, setInvestigations] = useState(() => LS.get("contract_investigations", []));
+  const [lessonsLearned, setLessonsLearned] = useState(() => LS.get("contract_lessons", []));
+
+  // ---- current investigation working state ----
+  const [contractText, setContractText] = useState("");
+  const [contractFiles, setContractFiles] = useState([]); // {kind, name, mediaType, data, dataUrl} or {kind: 'text', name, text}
+  const [vendor, setVendor] = useState("");
+  const [title, setTitle] = useState("");
+  const [focusInstruction, setFocusInstruction] = useState("");
+  const [investigation, setInvestigation] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState("");
+  const [error, setError] = useState("");
+  const [activeInvestigationId, setActiveInvestigationId] = useState(null);
+  const [search, setSearch] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  // Add-to-Memory / Add-to-Notes UI state
+  const [addModal, setAddModal] = useState(null); // 'memory' | 'notes' | null
+  const [addContent, setAddContent] = useState("");
+  const [addTitle, setAddTitle] = useState("");
+  const [addStatus, setAddStatus] = useState("");
+
+  const persistInvestigations = (next) => { setInvestigations(next); LS.set("contract_investigations", next); };
+  const persistLessons = (next) => { setLessonsLearned(next); LS.set("contract_lessons", next); };
+
+  // ---- file ingestion (mirrors EmailView pattern) ----
+  const readContractFile = (file) => new Promise((resolve, reject) => {
+    const name = file.name || "file";
+    const lower = name.toLowerCase();
+    const isText = /\.(txt|eml|msg|csv|json|md|log|html|rtf)$/i.test(lower) || (file.type && /^text\//.test(file.type));
+    const isImage = /^image\//.test(file.type || "");
+    const isPdf = /\.pdf$/i.test(lower) || file.type === "application/pdf";
+    if (isText) {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ kind: "text", name, text: String(reader.result || "") });
+      reader.onerror = () => reject(new Error("Couldn't read " + name));
+      reader.readAsText(file);
+    } else if (isImage) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1600;
+          let w = img.width, h = img.height;
+          if (Math.max(w, h) > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          const comma = dataUrl.indexOf(",");
+          resolve({ kind: "image", name, mediaType: "image/jpeg", data: dataUrl.slice(comma + 1), dataUrl });
+        };
+        img.onerror = () => reject(new Error("Couldn't decode image " + name));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(new Error("Couldn't read " + name));
+      reader.readAsDataURL(file);
+    } else if (isPdf) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        const comma = dataUrl.indexOf(",");
+        resolve({ kind: "pdf", name, mediaType: "application/pdf", data: dataUrl.slice(comma + 1), dataUrl });
+      };
+      reader.onerror = () => reject(new Error("Couldn't read PDF " + name));
+      reader.readAsDataURL(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ kind: "text", name, text: String(reader.result || "") });
+      reader.onerror = () => reject(new Error("Couldn't read " + name));
+      reader.readAsText(file);
+    }
+  });
+
+  const handleContractFiles = async (fileList) => {
+    setError("");
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    try {
+      const processed = await Promise.all(files.map(readContractFile));
+      let appendText = "";
+      const nextFiles = [...contractFiles];
+      for (const p of processed) {
+        if (p.kind === "text") {
+          appendText += (appendText ? "\n\n---\n" : "") + "[FILE: " + p.name + "]\n" + p.text;
+        } else {
+          nextFiles.push(p);
+        }
+      }
+      if (appendText) setContractText(prev => prev ? prev + "\n\n" + appendText : appendText);
+      if (nextFiles.length !== contractFiles.length) setContractFiles(nextFiles);
+    } catch (err) {
+      setError(err.message || "File read failed.");
+    }
+  };
+  const removeContractFile = (idx) => setContractFiles(prev => prev.filter((_, i) => i !== idx));
+
+  // ---- search ----
+  // Word-level AND matching so multi-word queries match even when words aren't
+  // adjacent. "water invoice Washington Hospital Center" matches a record
+  // titled "Water invoice — MedStar Washington Hospital Center".
+  const visibleInvestigations = (() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return investigations;
+    const tokens = q.split(/\s+/).filter(Boolean);
+    return investigations.filter(inv => {
+      const blob = [inv.vendor, inv.title, inv.contractText, inv.investigation, inv.userNotes, (inv.tags || []).join(" "), (inv.keyFindings || []).join(" ")].join(" ").toLowerCase();
+      return tokens.every(tok => blob.includes(tok));
+    });
+  })();
+
+  // ---- the investigation itself ----
+  const runInvestigation = async () => {
+    setError("");
+    if (!apiKey) { setError("Anthropic API key required. Settings (gear) → AI / Model."); return; }
+    if (!contractText.trim() && contractFiles.length === 0) { setError("Paste or upload a contract first."); return; }
+
+    setLoading(true);
+    setInvestigation("");
+    setStage("Reading the document...");
+
+    try {
+      // Pull prior investigations from the SAME vendor (or recent ones if no vendor named)
+      // and the global Lessons Learned. This is the "gets smarter with use" muscle.
+      const vendorLower = (vendor || "").toLowerCase().trim();
+      const priorSameVendor = vendorLower
+        ? investigations.filter(inv => (inv.vendor || "").toLowerCase().includes(vendorLower)).slice(0, 5)
+        : [];
+      const recent = investigations.slice(0, 3);
+      const priors = priorSameVendor.length ? priorSameVendor : recent;
+
+      const priorContext = priors.length === 0 ? "" :
+        "\n\n# PRIOR CONTRACT INVESTIGATIONS (apply pattern recognition; Twiney has been here before)\n" +
+        priors.map((inv, i) => (
+          `## Prior #${i + 1} — ${inv.vendor || "(no vendor)"} · ${inv.title || "(no title)"} · ${new Date(inv.createdAt).toLocaleDateString()}\n` +
+          `Key findings:\n${(inv.keyFindings || []).map(f => `  - ${f}`).join("\n") || "  (none recorded)"}\n` +
+          (inv.userNotes ? `Twiney's correction notes (USER VERIFIED — weight heavily):\n${inv.userNotes}\n` : "")
+        )).join("\n\n");
+
+      const lessonsContext = lessonsLearned.length === 0 ? "" :
+        "\n\n# LESSONS LEARNED (recurring red flags Twiney has flagged historically — surface aggressively when relevant)\n" +
+        lessonsLearned.map((l, i) => `${i + 1}. ${l.lesson}` + (l.source ? `  (from: ${l.source})` : "")).join("\n");
+
+      const focusClause = focusInstruction.trim() ? `\n\nFOCUS FROM TWINEY: ${focusInstruction.trim()}\nIntegrate this focus throughout the investigation. Do not skip the rest of the standard review.` : "";
+
+      const imageAttachments = contractFiles.filter(f => f.kind === "image" || f.kind === "pdf");
+
+      // PASS 1 — full attorney-grade investigation
+      setStage("Investigating like a seasoned attorney...");
+
+      const prompt = `You are Kera, acting as a seasoned contract attorney advising Antoine "Twiney" Riley Sr., Director of Systems Maintenance at Crothall Healthcare (MedStar Health portfolio, 10 hospitals). You have spent twenty years reviewing facilities and vendor agreements in the healthcare environment. You are thorough, conservative, plainspoken, and protective of Twiney's interests.
+
+Read this contract and produce a complete attorney-grade investigation. Use this exact structure, with each section as a clear header in CAPS:
+
+## DEAL SUMMARY
+Two or three sentences. Who, what, how much, what term, what the deal actually does.
+
+## PARTIES
+Identify every party, their role, and any apparent affiliations (parent companies, subsidiaries, signatories). Flag any party that is unclear or appears to shift between sections.
+
+## SCOPE OF WORK
+What is actually being delivered. Be precise. Then list every scope ambiguity, vague phrase, "as needed", "reasonable efforts", "industry standard" terms that have no defined meaning. Each ambiguity becomes a negotiation point.
+
+## PRICING & PAYMENT TERMS
+Rates, totals, escalators, surcharges, mobilization fees, cancellation fees. Net payment days. Late fees. Auto-rate-increase clauses. Anything ratcheting up after Year 1.
+
+## TERM & TERMINATION
+Initial term, renewal mechanics, notice periods, auto-renewal traps, termination for cause vs convenience, kill fees, termination assistance obligations, data return on exit.
+
+## INDEMNIFICATION & LIABILITY
+Who indemnifies whom. Scope of indemnity. Liability caps (is the cap mutual? is it tied to fees paid?). Carve-outs (gross negligence, willful misconduct, IP, confidentiality, indemnity itself). Consequential damages exclusions — and whether they cut both ways.
+
+## INSURANCE REQUIREMENTS
+Required coverage types and minimum limits. Additional insured language. Primary and non-contributory wording. Waiver of subrogation. Whether COIs are required pre-work.
+
+## WARRANTIES & REMEDIES
+Express warranties given. Implied warranty disclaimers. Remedy limitations. Time-bar on claims. Whether the warranty period actually covers the asset's useful life.
+
+## INTELLECTUAL PROPERTY
+Who owns what. Work-for-hire? License grants? Pre-existing IP carve-outs? Data ownership — particularly important if the contract touches MedStarH2OLog, Load Lever, BAS data, or any operational data Twiney's team generates.
+
+## CONFIDENTIALITY & DATA
+NDA reach, duration, surviving obligations. PHI/HIPAA exposure if hospital systems touch it. Data security minimums. Breach notification timeline.
+
+## DISPUTE RESOLUTION
+Jurisdiction, venue, governing law. Mandatory arbitration? Class action waivers? Mediation step? Attorney fee shifting. Statute of limitations modification.
+
+## ASSIGNMENT & CHANGE OF CONTROL
+Can vendor assign without consent? What happens if vendor is acquired? Termination right on change of control?
+
+## FORCE MAJEURE
+What's covered. What's excluded. Notice requirements. Performance suspension vs termination.
+
+## RED FLAGS — TOP 5
+The five things that would keep a careful attorney up at night. Each with: WHAT (the clause), WHY IT MATTERS (the risk in plain terms), and RECOMMENDATION (specific edit or pushback).
+
+## NEGOTIATION TARGETS
+Ranked list of specific changes to demand. Each with: clause reference, current language, suggested replacement language, fallback position.
+
+## QUESTIONS FOR THE VENDOR
+Concrete questions to send before signing. Each should be answerable in writing.
+
+## SIGNING GUIDANCE
+Final attorney recommendation: SIGN AS-IS / SIGN WITH MINOR EDITS / DO NOT SIGN WITHOUT REVISION / DO NOT SIGN. State the reasoning in one sentence.
+
+Plain prose within each section. Quote contract language when wording is the issue. Be specific to the actual document — do not give generic boilerplate analysis. If a section truly does not apply (e.g. no IP clause exists), say so explicitly.${priorContext}${lessonsContext}${focusClause}
+
+---
+CONTRACT BEING REVIEWED:
+${vendor ? "Vendor (per Twiney): " + vendor + "\n" : ""}${title ? "Title (per Twiney): " + title + "\n" : ""}
+${contractText || "(See attached document)"}
+---`;
+
+      const reply = await callClaude({
+        prompt,
+        apiKey,
+        model,
+        source: "contract-investigation",
+        images: imageAttachments.length ? imageAttachments : null,
+        maxTokens: 8000,
+      });
+
+      setInvestigation(reply);
+      setStage("Extracting key findings...");
+
+      // PASS 2 — distill key findings into structured form for storage + lessons learned
+      const distillPrompt = `From the contract investigation below, extract structured metadata. Return ONLY valid JSON, no preamble, no markdown fences:
+
+{
+  "vendor": "best-guess vendor name from the document",
+  "title": "best-guess contract title or short description",
+  "key_findings": ["3-7 short findings, each one sentence"],
+  "red_flags": ["the 5 red flags from the TOP 5 section, each one sentence"],
+  "signing_recommendation": "SIGN AS-IS | SIGN WITH MINOR EDITS | DO NOT SIGN WITHOUT REVISION | DO NOT SIGN",
+  "tags": ["short topical tags like: liability, indemnification, auto-renew, ip, hipaa, etc."]
+}
+
+INVESTIGATION:
+${reply.slice(0, 12000)}`;
+
+      let metadata = {};
+      try {
+        const distillReply = await callClaude({ prompt: distillPrompt, apiKey, model, source: "contract-distill", maxTokens: 1500 });
+        const cleaned = distillReply.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+        metadata = JSON.parse(cleaned);
+      } catch (e) {
+        // If distill fails, fall back to minimal metadata so save still works
+        metadata = { vendor: vendor || "", title: title || "", key_findings: [], red_flags: [], signing_recommendation: "", tags: [] };
+      }
+
+      // Save the investigation to history (this is what makes Kera smarter next time)
+      const record = {
+        id: Date.now(),
+        createdAt: Date.now(),
+        vendor: vendor || metadata.vendor || "",
+        title: title || metadata.title || "Untitled contract",
+        contractText: contractText.slice(0, 50000),
+        attachmentNames: contractFiles.map(f => f.name),
+        investigation: reply,
+        keyFindings: metadata.key_findings || [],
+        redFlags: metadata.red_flags || [],
+        signingRecommendation: metadata.signing_recommendation || "",
+        tags: metadata.tags || [],
+        userNotes: "",
+      };
+      const nextInvestigations = [record, ...investigations].slice(0, 100);
+      persistInvestigations(nextInvestigations);
+      setActiveInvestigationId(record.id);
+
+      // Promote any new red flags into Lessons Learned (only if not already covered)
+      const existingLessons = new Set(lessonsLearned.map(l => l.lesson.toLowerCase()));
+      const newLessons = (metadata.red_flags || [])
+        .filter(rf => rf && !existingLessons.has(rf.toLowerCase()))
+        .map(rf => ({
+          id: Date.now() + Math.random(),
+          lesson: rf,
+          source: (vendor || metadata.vendor || "contract") + " · " + new Date().toLocaleDateString(),
+          addedAt: Date.now(),
+        }));
+      if (newLessons.length) persistLessons([...newLessons, ...lessonsLearned].slice(0, 50));
+
+      setStage("");
+    } catch (e) {
+      setError("Investigation failed: " + e.message);
+      setStage("");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearWorking = () => {
+    setContractText(""); setContractFiles([]); setVendor(""); setTitle(""); setFocusInstruction(""); setInvestigation(""); setError(""); setActiveInvestigationId(null);
+  };
+
+  const loadInvestigation = (id) => {
+    const inv = investigations.find(i => i.id === id);
+    if (!inv) return;
+    setContractText(inv.contractText || "");
+    setContractFiles([]);
+    setVendor(inv.vendor || "");
+    setTitle(inv.title || "");
+    setInvestigation(inv.investigation || "");
+    setActiveInvestigationId(inv.id);
+    setShowHistory(false);
+  };
+
+  const deleteInvestigation = (id) => {
+    persistInvestigations(investigations.filter(i => i.id !== id));
+    if (activeInvestigationId === id) { setActiveInvestigationId(null); setInvestigation(""); }
+  };
+
+  const saveUserNote = (id, note) => {
+    const next = investigations.map(i => i.id === id ? { ...i, userNotes: note } : i);
+    persistInvestigations(next);
+  };
+
+  const removeLesson = (id) => persistLessons(lessonsLearned.filter(l => l.id !== id));
+
+  // ---- Add to Memory / Notes ----
+  const openAdd = (target) => {
+    const active = investigations.find(i => i.id === activeInvestigationId);
+    setAddStatus("");
+    setAddModal(target);
+    if (target === "memory") {
+      // Default to a concise memory format
+      const v = active?.vendor || vendor || "vendor";
+      const t = active?.title || title || "contract";
+      const findings = (active?.keyFindings || []).slice(0, 5).map(f => "- " + f).join("\n");
+      setAddTitle("");
+      setAddContent(`Contract reviewed for ${v} (${t}). Key findings:\n${findings || "(none captured)"}\nRecommendation: ${active?.signingRecommendation || "—"}.`);
+    } else if (target === "notes") {
+      const v = active?.vendor || vendor || "Vendor";
+      const t = active?.title || title || "Contract";
+      setAddTitle(`Contract Review — ${v} — ${t}`);
+      setAddContent(investigation || "");
+    }
+  };
+  const commitAdd = () => {
+    if (addModal === "memory") {
+      const text = addContent.trim();
+      if (!text) { setAddStatus("Nothing to save."); return; }
+      const mems = LS.get("memories", []);
+      const next = [{ id: Date.now(), text, pinned: false, createdAt: Date.now(), source: "contract-review" }, ...mems];
+      LS.set("memories", next);
+      setAddStatus("Added to Memory.");
+      setTimeout(() => { setAddModal(null); setAddStatus(""); }, 900);
+    } else if (addModal === "notes") {
+      const body = addContent.trim();
+      const ttl = addTitle.trim() || "Contract Review";
+      if (!body) { setAddStatus("Nothing to save."); return; }
+      const notes = LS.get("notes", []);
+      const next = [{ id: Date.now(), title: ttl, body, pinned: false, createdAt: Date.now(), source: "contract-review" }, ...notes];
+      LS.set("notes", next);
+      setAddStatus("Added to Notes.");
+      setTimeout(() => { setAddModal(null); setAddStatus(""); }, 900);
+    }
+  };
+
+  const activeInv = investigations.find(i => i.id === activeInvestigationId);
+  const recommendationColor = (rec) => {
+    if (!rec) return T.textDim;
+    if (/DO NOT SIGN(?!\s*WITHOUT)/i.test(rec)) return T.red;
+    if (/WITHOUT REVISION/i.test(rec)) return T.amber;
+    if (/MINOR EDITS/i.test(rec)) return T.cyan;
+    if (/AS-IS/i.test(rec)) return T.green;
+    return T.textDim;
+  };
+
+  return (
+    <div style={{ padding: 22 }}>
+      <div style={{ marginBottom: 20, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Contract Investigator</div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>
+            Seasoned-attorney review. Gets sharper with every contract.
+          </h1>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Btn icon="list" variant={showHistory ? "primary" : "ghost"} onClick={() => setShowHistory(s => !s)}>History · {investigations.length}</Btn>
+          {investigation && <Btn icon="trash" variant="ghost" onClick={clearWorking}>New Review</Btn>}
+        </div>
+      </div>
+
+      {/* Search across all investigations */}
+      <div style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 360px", maxWidth: 560 }}>
+          <input
+            type="search"
+            value={search}
+            onChange={e => { setSearch(e.target.value); if (e.target.value && !showHistory) setShowHistory(true); }}
+            placeholder="Search past contracts — e.g. 'water invoice Washington Hospital Center' or 'Limbach indemnification'"
+            style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 14px 10px 36px", borderRadius: 2 }}
+          />
+          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: T.textFaint, display: "inline-flex" }}><Icon name="search" size={13} /></span>
+        </div>
+        {search && (
+          <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 11 }}>{visibleInvestigations.length} match{visibleInvestigations.length === 1 ? "" : "es"}</span>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ background: T.red + "11", border: "1px solid " + T.red + "33", color: T.red, padding: "10px 14px", borderRadius: 2, fontFamily: FF.mono, fontSize: 11, marginBottom: 14 }}>
+          {error}
+        </div>
+      )}
+
+      {/* History panel — collapsible */}
+      {showHistory && (
+        <div style={{ marginBottom: 14 }}>
+          <Panel title={search ? `Search Results · ${visibleInvestigations.length}` : `Contract History · ${investigations.length}`} accent={T.cyan} noPad>
+            {visibleInvestigations.length === 0 ? (
+              <div style={{ padding: "30px 20px", color: T.textFaint, fontFamily: FF.mono, fontSize: 11, textAlign: "center", letterSpacing: 1.2 }}>
+                {search ? "NO MATCHES" : "NO CONTRACTS YET — RUN AN INVESTIGATION TO START BUILDING HISTORY"}
+              </div>
+            ) : (
+              <div style={{ maxHeight: 380, overflowY: "auto" }}>
+                {visibleInvestigations.map((inv, i) => (
+                  <div key={inv.id}
+                    onClick={() => loadInvestigation(inv.id)}
+                    style={{
+                      padding: "12px 16px",
+                      borderBottom: i < visibleInvestigations.length - 1 ? "1px solid " + T.borderFaint : "none",
+                      cursor: "pointer",
+                      background: activeInvestigationId === inv.id ? T.bgSunken : "transparent",
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      gap: 12,
+                      alignItems: "start",
+                    }}
+                    onMouseEnter={e => { if (activeInvestigationId !== inv.id) e.currentTarget.style.background = T.bgSunken + "80"; }}
+                    onMouseLeave={e => { if (activeInvestigationId !== inv.id) e.currentTarget.style.background = "transparent"; }}>
+                    <div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+                        <span style={{ ...TS.body, color: T.text, fontWeight: 500 }}>{inv.title || "(untitled)"}</span>
+                        {inv.vendor && <span style={{ color: T.cyan, fontFamily: FF.mono, fontSize: 11 }}>· {inv.vendor}</span>}
+                        {inv.signingRecommendation && (
+                          <span style={{
+                            color: recommendationColor(inv.signingRecommendation),
+                            fontFamily: FF.mono, fontSize: 9, letterSpacing: 1, padding: "2px 6px",
+                            border: "1px solid " + recommendationColor(inv.signingRecommendation) + "55", borderRadius: 2,
+                          }}>{inv.signingRecommendation}</span>
+                        )}
+                      </div>
+                      {inv.keyFindings && inv.keyFindings.length > 0 && (
+                        <div style={{ color: T.textDim, fontSize: 12, lineHeight: 1.5, marginBottom: 4 }}>
+                          {inv.keyFindings.slice(0, 2).join(" · ")}
+                        </div>
+                      )}
+                      <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 0.4 }}>
+                        {new Date(inv.createdAt).toLocaleString()} {inv.tags && inv.tags.length > 0 ? "· " + inv.tags.join(", ") : ""}
+                      </div>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); if (confirm("Delete this investigation?")) deleteInvestigation(inv.id); }}
+                      style={{ background: "transparent", border: "none", color: T.textFaint, cursor: "pointer", padding: "0 4px", fontSize: 16, lineHeight: 1 }}
+                      onMouseEnter={e => e.currentTarget.style.color = T.red}
+                      onMouseLeave={e => e.currentTarget.style.color = T.textFaint}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </div>
+      )}
+
+      {/* Lessons Learned panel — the "gets smarter with use" surface */}
+      {lessonsLearned.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <Panel title={`Lessons Learned · ${lessonsLearned.length}`} subtitle="Recurring red flags Kera now watches for automatically" accent={T.brass}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {lessonsLearned.slice(0, 10).map(l => (
+                <div key={l.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid " + T.borderFaint }}>
+                  <span style={{ color: T.brass, fontFamily: FF.mono, fontSize: 11, marginTop: 1 }}>◇</span>
+                  <div style={{ flex: 1, color: T.text, fontSize: 13, lineHeight: 1.5 }}>
+                    {l.lesson}
+                    {l.source && <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, marginLeft: 8 }}>· {l.source}</span>}
+                  </div>
+                  <button onClick={() => removeLesson(l.id)} title="Remove lesson"
+                    style={{ background: "transparent", border: "none", color: T.textFaint, cursor: "pointer", padding: "0 4px", fontSize: 14, lineHeight: 1 }}
+                    onMouseEnter={e => e.currentTarget.style.color = T.red}
+                    onMouseLeave={e => e.currentTarget.style.color = T.textFaint}>×</button>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      )}
+
+      {/* Main workspace */}
+      <div style={{ display: "grid", gridTemplateColumns: investigation ? "1fr 1.4fr" : "1fr", gap: 14 }}>
+        {/* Input column */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Panel title="Contract Document">
+            <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                value={vendor}
+                onChange={e => setVendor(e.target.value)}
+                placeholder="Vendor (optional — Kera will infer)"
+                style={{ flex: "1 1 240px", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 2 }}
+              />
+              <input
+                type="text"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Title / proposal # (optional)"
+                style={{ flex: "1 1 240px", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 2 }}
+              />
+            </div>
+
+            <textarea
+              value={contractText}
+              onChange={e => setContractText(e.target.value)}
+              placeholder="Paste contract text here, or upload PDF/scanned image/.eml/.txt below..."
+              rows={12}
+              style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }}
+            />
+
+            {/* File upload */}
+            <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", background: T.bgSunken, border: "1px dashed " + T.border, borderRadius: 2, cursor: "pointer", color: T.textDim, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.2 }}>
+                <Icon name="file" size={12} /> UPLOAD CONTRACT
+                <input type="file" multiple accept=".txt,.eml,.msg,.md,.csv,.json,.html,.pdf,image/*"
+                  onChange={e => { handleContractFiles(e.target.files); e.target.value = ""; }}
+                  style={{ display: "none" }} />
+              </label>
+              <span style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10 }}>.pdf .txt .eml .md .png .jpg — multiple OK</span>
+            </div>
+            {contractFiles.length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {contractFiles.map((f, i) => (
+                  <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, color: T.text, fontFamily: FF.mono, fontSize: 11 }}>
+                    <Icon name="file" size={11} />
+                    <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                    <button onClick={() => removeContractFile(i)} style={{ background: "transparent", border: "none", color: T.textFaint, fontSize: 14, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Focus Instruction (optional)" subtitle="Anything Kera should weigh extra in this review">
+            <input
+              type="text"
+              value={focusInstruction}
+              onChange={e => setFocusInstruction(e.target.value)}
+              placeholder="e.g. 'I'm worried about the auto-renewal trap' or 'compare to last Limbach contract'"
+              style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 14px", borderRadius: 2 }}
+            />
+          </Panel>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Btn icon="spark" variant="primary" onClick={runInvestigation} loading={loading} disabled={loading}>
+              {loading ? (stage || "Investigating...") : "Run Investigation"}
+            </Btn>
+            {(contractText || contractFiles.length) && !loading && <Btn icon="trash" variant="ghost" onClick={clearWorking}>Clear</Btn>}
+          </div>
+        </div>
+
+        {/* Output column — only shows when there's something to display */}
+        {investigation && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Panel
+              title="Attorney-Grade Investigation"
+              accent={T.brass}
+              subtitle={activeInv?.signingRecommendation || ""}
+              action={
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => navigator.clipboard?.writeText(investigation)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
+                  <button onClick={() => {
+                    const blob = new Blob([investigation], { type: "text/markdown" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "contract-review-" + (vendor || "unnamed").replace(/[^a-z0-9]/gi, "_").toLowerCase() + "-" + new Date().toISOString().slice(0, 10) + ".md";
+                    a.click(); URL.revokeObjectURL(url);
+                  }} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>DOWNLOAD</button>
+                </div>
+              }
+            >
+              <div style={{ fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 720, overflowY: "auto" }}>{investigation}</div>
+            </Panel>
+
+            {/* Add to Memory / Notes */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Btn icon="brain" variant="primary" onClick={() => openAdd("memory")}>Add to Memory</Btn>
+              <Btn icon="file" variant="primary" onClick={() => openAdd("notes")}>Add to Notes</Btn>
+            </div>
+
+            {/* User correction note — feeds the get-smarter-with-use loop */}
+            {activeInv && (
+              <Panel title="Your Correction Notes" subtitle="Push back on findings. Saved as USER VERIFIED and weighted heavily next time.">
+                <textarea
+                  value={activeInv.userNotes || ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    persistInvestigations(investigations.map(i => i.id === activeInv.id ? { ...i, userNotes: v } : i));
+                  }}
+                  placeholder="e.g. 'On Limbach contracts, the indemnity carve-out for gross negligence is acceptable to us — don't flag it next time.'"
+                  rows={3}
+                  style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 12, borderRadius: 2, resize: "vertical", lineHeight: 1.5 }}
+                />
+              </Panel>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Add-to-Memory / Notes modal */}
+      {addModal && (
+        <>
+          <div onClick={() => setAddModal(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 90 }} />
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+            width: "min(640px, 92vw)", maxHeight: "85vh", overflowY: "auto",
+            background: T.bgRaised, border: "1px solid " + T.border, borderRadius: 2,
+            boxShadow: "0 12px 40px rgba(0,0,0,0.6)", zIndex: 91, padding: "22px 24px",
+          }}>
+            <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.brass, letterSpacing: 1.6, marginBottom: 6 }}>
+              {addModal === "memory" ? "ADD TO MEMORY" : "ADD TO NOTES"}
+            </div>
+            <div style={{ ...TS.h3, color: T.text, marginBottom: 14 }}>
+              {addModal === "memory" ? "Inject this contract context into every Kera call" : "Save this review as a referenceable document"}
+            </div>
+            {addModal === "notes" && (
+              <input
+                type="text"
+                value={addTitle}
+                onChange={e => setAddTitle(e.target.value)}
+                placeholder="Note title"
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.body, fontSize: 14, padding: "10px 14px", borderRadius: 2, marginBottom: 10 }}
+              />
+            )}
+            <textarea
+              value={addContent}
+              onChange={e => setAddContent(e.target.value)}
+              rows={addModal === "notes" ? 14 : 8}
+              style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }}
+            />
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: addStatus.includes("Added") ? T.green : T.red, fontFamily: FF.mono, fontSize: 11 }}>{addStatus}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setAddModal(null)}
+                  style={{ background: "transparent", border: "1px solid " + T.border, color: T.textDim, padding: "8px 16px", borderRadius: 2, cursor: "pointer", fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.2 }}>
+                  CANCEL
+                </button>
+                <Btn icon="check" variant="primary" onClick={commitAdd}>
+                  {addModal === "memory" ? "Add to Memory" : "Add to Notes"}
+                </Btn>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ---------- REPORTS ----------
 const ReportsView = ({ apiKey, model }) => {
   const [type, setType] = useState("outage");
@@ -3389,6 +4155,7 @@ const Palette = ({ open, onClose, onJump }) => {
     { id: "recordings", label: "Plaud Recordings", icon: "mic" },
     { id: "focus", label: "Open Focus OS", icon: "brain" },
     { id: "email", label: "Email Intelligence", icon: "mail" },
+    { id: "contracts", label: "Contract Investigator", icon: "key" },
     { id: "reports", label: "Report Drafter", icon: "file" },
     { id: "memory", label: "Long-Term Memory", icon: "brain" },
     { id: "notes", label: "Notes & Documents", icon: "file" },
@@ -3668,6 +4435,12 @@ if (typeof window !== "undefined" && window.speechSynthesis) {
 const MemoryView = () => {
   const [memories, setMemories] = useState(() => LS.get("memories", []));
   const [draft, setDraft] = useState("");
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  // Pending upload state — when a file is dropped, ask the user how to add it.
+  // pending = { filename, text } if a decision is needed; null otherwise.
+  const [pendingUpload, setPendingUpload] = useState(null);
+  const dropZoneRef = useRef(null);
   const persist = (next) => { setMemories(next); LS.set("memories", next); };
   const add = () => {
     const t = draft.trim();
@@ -3678,6 +4451,102 @@ const MemoryView = () => {
   const remove = (id) => persist(memories.filter(m => m.id !== id));
   const togglePin = (id) => persist(memories.map(m => m.id === id ? { ...m, pinned: !m.pinned } : m));
 
+  // Memory upload — accepts plain-text formats only. Images and PDFs are rejected
+  // with a clear message; vision content doesn't belong in long-term memory anyway.
+  const TEXT_RE = /\.(txt|md|markdown|eml|msg|csv|json|log|html|rtf)$/i;
+  const ingestFile = (file) => {
+    setUploadError("");
+    if (!file) return;
+    const name = file.name || "memory-upload";
+    if (/\.(pdf|png|jpe?g|gif|webp|heic|mp4|mov)$/i.test(name)) {
+      setUploadError(name + " — binary file types aren't supported for memory. Use Notes for documents that need vision or PDF parsing.");
+      return;
+    }
+    if (!TEXT_RE.test(name) && !(file.type && file.type.startsWith("text/"))) {
+      setUploadError(name + " — unsupported file type. Use .txt, .md, .eml, .csv, .json, .log, or .html.");
+      return;
+    }
+    if (file.size > 1_000_000) {
+      setUploadError(name + " — file too large (" + Math.round(file.size / 1024) + "KB). Memory entries should stay under 1MB. Use Notes for large reference docs.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || "").trim();
+      if (!text) { setUploadError(name + " — file is empty."); return; }
+      // Offer the user a choice via the pendingUpload modal.
+      setPendingUpload({ filename: name, text });
+    };
+    reader.onerror = () => setUploadError("Couldn't read " + name);
+    reader.readAsText(file);
+  };
+
+  // After the user picks how to import, actually add to memories.
+  // mode === "single" → one memory entry containing the whole file body.
+  // mode === "lines"  → split into atomic memories (one per non-empty line).
+  // mode === "sections" → split on Markdown headings (## or ---) into one memory per section.
+  const commitPending = (mode) => {
+    if (!pendingUpload) return;
+    const ts = Date.now();
+    const entries = [];
+    if (mode === "single") {
+      entries.push({ id: ts, text: pendingUpload.text, pinned: false, createdAt: ts, source: pendingUpload.filename });
+    } else if (mode === "lines") {
+      const lines = pendingUpload.text
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => l && !l.startsWith("#") && !/^[-*=]{3,}$/.test(l));
+      lines.forEach((line, i) => {
+        entries.push({ id: ts + i, text: line, pinned: false, createdAt: ts + i, source: pendingUpload.filename });
+      });
+    } else if (mode === "sections") {
+      // Split on Markdown headings. A "section" = heading line + content until the next heading.
+      const raw = pendingUpload.text;
+      const parts = raw.split(/^(#{1,6}\s+.+)$/m);
+      // After splitting on a capturing regex, every other element is the heading.
+      const sections = [];
+      for (let i = 1; i < parts.length; i += 2) {
+        const heading = parts[i].trim();
+        const body = (parts[i + 1] || "").trim();
+        if (heading || body) sections.push((heading + "\n" + body).trim());
+      }
+      // If no headings were found, fall back to splitting on horizontal rules / blank-line clusters.
+      if (sections.length === 0) {
+        const fallback = raw.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+        fallback.forEach(s => sections.push(s));
+      }
+      sections.forEach((s, i) => entries.push({ id: ts + i, text: s, pinned: false, createdAt: ts + i, source: pendingUpload.filename }));
+    }
+    if (entries.length === 0) {
+      setUploadError("Nothing to add — file produced no usable memory entries.");
+      setPendingUpload(null);
+      return;
+    }
+    persist([...entries, ...memories]);
+    setPendingUpload(null);
+  };
+
+  // Drag handlers
+  const onDragOver = (e) => { e.preventDefault(); e.stopPropagation(); setDragActive(true); };
+  const onDragLeave = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    // Only deactivate when actually leaving the drop zone, not when crossing a child element
+    if (e.currentTarget === e.target) setDragActive(false);
+  };
+  const onDrop = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length === 0) return;
+    // Memory uploads handle one file at a time so the per-file ingest dialog
+    // doesn't pile up. If the user dropped multiple, process the first and
+    // tell them about the others.
+    if (files.length > 1) {
+      setUploadError("Multiple files dropped — only processing the first (" + files[0].name + "). Drop one at a time for more control.");
+    }
+    ingestFile(files[0]);
+  };
+
   return (
     <div style={{ padding: 22 }}>
       <div style={{ marginBottom: 20 }}>
@@ -3687,6 +4556,51 @@ const MemoryView = () => {
           Anything here gets injected into every conversation as context. Use it for facts you don't want to repeat: vendor preferences, naming conventions, recurring contacts, project context, your writing style.
         </div>
       </div>
+
+      {/* Drop zone — also serves as the click-to-upload affordance */}
+      <div
+        ref={dropZoneRef}
+        onDragOver={onDragOver}
+        onDragEnter={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        style={{
+          marginBottom: 16,
+          background: dragActive ? T.cyan + "22" : T.bgSunken,
+          border: "1px dashed " + (dragActive ? T.cyan : T.border),
+          borderRadius: 2,
+          padding: "16px 18px",
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          flexWrap: "wrap",
+          transition: "background 0.15s, border-color 0.15s",
+        }}
+      >
+        <div style={{ flex: "1 1 280px", minWidth: 200 }}>
+          <div style={{ fontFamily: FF.mono, fontSize: 11, color: dragActive ? T.cyan : T.textDim, letterSpacing: 1.4, marginBottom: 4 }}>
+            {dragActive ? "DROP TO IMPORT" : "DRAG & DROP A FILE TO IMPORT MEMORIES"}
+          </div>
+          <div style={{ color: T.textFaint, fontFamily: FF.mono, fontSize: 10, letterSpacing: 0.5, lineHeight: 1.5 }}>
+            Plain-text formats: .txt .md .eml .csv .json .log .html · max 1MB · drop a memory dump and pick how to import it
+          </div>
+        </div>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", background: T.bgRaised, border: "1px solid " + T.border, borderRadius: 2, cursor: "pointer", color: T.text, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.2 }}>
+          <Icon name="file" size={12} />
+          BROWSE
+          <input
+            type="file"
+            accept=".txt,.md,.markdown,.eml,.msg,.csv,.json,.log,.html,.rtf,text/*"
+            onChange={e => { ingestFile(e.target.files?.[0]); e.target.value = ""; }}
+            style={{ display: "none" }}
+          />
+        </label>
+      </div>
+      {uploadError && (
+        <div style={{ background: T.red + "11", border: "1px solid " + T.red + "33", color: T.red, padding: "10px 14px", borderRadius: 2, fontFamily: FF.mono, fontSize: 11, marginBottom: 14 }}>
+          {uploadError}
+        </div>
+      )}
 
       <Panel title="Add Memory">
         <textarea value={draft} onChange={e => setDraft(e.target.value)}
@@ -3709,7 +4623,12 @@ const MemoryView = () => {
                 style={{ background: "transparent", border: "none", color: m.pinned ? T.brass : T.textFaint, cursor: "pointer", padding: "2px 4px", fontSize: 14, lineHeight: 1 }}>
                 {m.pinned ? "★" : "☆"}
               </button>
-              <div style={{ flex: 1, fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.text}</div>
+              <div style={{ flex: 1, fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                {m.text}
+                {m.source && (
+                  <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 1, marginTop: 4 }}>SOURCE: {m.source}</div>
+                )}
+              </div>
               <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 0.6, marginTop: 2 }}>
                 {new Date(m.createdAt).toLocaleDateString()}
               </div>
@@ -3723,6 +4642,59 @@ const MemoryView = () => {
           ))}
         </Panel>
       </div>
+
+      {/* Import-mode dialog. Shown after a file is read so the user can pick
+          how memories get split. Backdrop click cancels without importing. */}
+      {pendingUpload && (
+        <>
+          <div onClick={() => setPendingUpload(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 90 }} />
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+            width: "min(560px, 92vw)", maxHeight: "85vh", overflowY: "auto",
+            background: T.bgRaised, border: "1px solid " + T.border, borderRadius: 2,
+            boxShadow: "0 12px 40px rgba(0,0,0,0.6)", zIndex: 91,
+            padding: "22px 24px",
+          }}>
+            <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.brass, letterSpacing: 1.6, marginBottom: 6 }}>IMPORT MEMORY</div>
+            <div style={{ ...TS.h3, color: T.text, marginBottom: 4 }}>{pendingUpload.filename}</div>
+            <div style={{ color: T.textDim, fontFamily: FF.mono, fontSize: 11, marginBottom: 18 }}>
+              {pendingUpload.text.length.toLocaleString()} chars · how would you like this stored?
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button onClick={() => commitPending("single")}
+                style={{ textAlign: "left", padding: "12px 14px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, cursor: "pointer", color: T.text }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = T.cyan; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = T.borderFaint; }}>
+                <div style={{ fontFamily: FF.body, fontSize: 14, fontWeight: 500, color: T.text, marginBottom: 2 }}>Single memory</div>
+                <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textDim, lineHeight: 1.5 }}>Add the whole file as one entry. Best for memory dumps, profiles, or briefs.</div>
+              </button>
+              <button onClick={() => commitPending("sections")}
+                style={{ textAlign: "left", padding: "12px 14px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, cursor: "pointer", color: T.text }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = T.cyan; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = T.borderFaint; }}>
+                <div style={{ fontFamily: FF.body, fontSize: 14, fontWeight: 500, color: T.text, marginBottom: 2 }}>Split by section</div>
+                <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textDim, lineHeight: 1.5 }}>One memory per Markdown heading (##, ###). Best for structured docs with named sections.</div>
+              </button>
+              <button onClick={() => commitPending("lines")}
+                style={{ textAlign: "left", padding: "12px 14px", background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, cursor: "pointer", color: T.text }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = T.cyan; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = T.borderFaint; }}>
+                <div style={{ fontFamily: FF.body, fontSize: 14, fontWeight: 500, color: T.text, marginBottom: 2 }}>One per line</div>
+                <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textDim, lineHeight: 1.5 }}>Each non-empty line becomes a separate memory. Best for atomic memory lists (rules, facts, preferences).</div>
+              </button>
+            </div>
+
+            <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => setPendingUpload(null)}
+                style={{ background: "transparent", border: "1px solid " + T.border, color: T.textDim, padding: "8px 16px", borderRadius: 2, cursor: "pointer", fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.2 }}>
+                CANCEL
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -3925,6 +4897,13 @@ const RecordingsView = ({ apiKey, model }) => {
   const [draftApi, setDraftApi] = useState("");
   const [aiBusy, setAiBusy] = useState("");
   const [aiOutput, setAiOutput] = useState("");
+  // Site Mechanical Tour — parsed JSON from the tour extraction action.
+  // Held separately from aiOutput so the "File to Site" UI can render.
+  // Shape: { site_code, tour_date, areas_walked[], personnel_present[], equipment{}, open_issues[], follow_ups[], raw_observations }
+  const [tourData, setTourData] = useState(null);
+  const [tourError, setTourError] = useState("");
+  const [tourTargetSite, setTourTargetSite] = useState("");
+  const [tourFileStatus, setTourFileStatus] = useState("");
   const [filter, setFilter] = useState("all"); // all | tagged | untagged | pinned | hidden
   const [siteFilter, setSiteFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
@@ -4003,6 +4982,10 @@ const RecordingsView = ({ apiKey, model }) => {
     setActiveId(id);
     setDetail(null);
     setAiOutput("");
+    setTourData(null);
+    setTourError("");
+    setTourTargetSite("");
+    setTourFileStatus("");
     setDetailLoading(true);
     try {
       // Derive detail URL from list URL — same base, swap path
@@ -4037,6 +5020,9 @@ const RecordingsView = ({ apiKey, model }) => {
     if (!detail || !detail.transcript || !apiKey) return;
     setAiBusy(action.id);
     setAiOutput("");
+    setTourData(null);
+    setTourError("");
+    setTourFileStatus("");
     try {
       // Merge user overrides into the detail object so AI prompts can reference them
       const ov = overrides[active.id] || {};
@@ -4051,14 +5037,143 @@ const RecordingsView = ({ apiKey, model }) => {
         prompt: action.prompt(enriched),
         apiKey, model,
         source: "recordings-" + action.id,
-        maxTokens: 2048,
+        maxTokens: action.structured ? 4000 : 2048,
       });
-      setAiOutput(out);
+
+      if (action.structured) {
+        // Strip code fences if Kera added them anyway, then locate the JSON object
+        let jsonStr = out.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+        const firstBrace = jsonStr.indexOf("{");
+        const lastBrace = jsonStr.lastIndexOf("}");
+        if (firstBrace >= 0 && lastBrace > firstBrace) jsonStr = jsonStr.slice(firstBrace, lastBrace + 1);
+        try {
+          const parsed = JSON.parse(jsonStr);
+          setTourData(parsed);
+          // Pre-populate the target site dropdown using detection order:
+          //   1) Kera's site_code from the transcript
+          //   2) Any user-assigned site codes
+          //   3) Auto-detected codes from the transcript
+          const candidate = parsed.site_code
+            || (enriched.userSiteCodes && enriched.userSiteCodes[0])
+            || (detail.siteCodes && detail.siteCodes[0])
+            || "";
+          if (candidate && SITE_CODES.includes(candidate)) setTourTargetSite(candidate);
+          // Keep the raw text available too in case Twiney wants to copy it
+          setAiOutput(out);
+        } catch (parseErr) {
+          // Fall back gracefully — show the raw output and let Antoine see what came back
+          setTourError("Kera didn't return valid JSON. Raw output is shown below.");
+          setAiOutput(out);
+        }
+      } else {
+        setAiOutput(out);
+      }
     } catch (e) {
       setAiOutput("Error: " + e.message);
     } finally {
       setAiBusy("");
     }
+  };
+
+  // Merge tour findings into the target site profile non-destructively.
+  // Existing equipment text is preserved; new findings are appended with a
+  // dated header so prior context is never overwritten.
+  const fileTourToSite = () => {
+    if (!tourData || !tourTargetSite) { setTourFileStatus("Pick a site first."); return; }
+    if (!SITE_CODES.includes(tourTargetSite)) { setTourFileStatus("Invalid site code."); return; }
+
+    const sites = LS.get("sites", []);
+    let target = sites.find(s => s.code === tourTargetSite);
+    if (!target) {
+      // First-time write — seed the site row
+      target = { code: tourTargetSite, name: SITE_NAMES[tourTargetSite] || "", equipment: {}, temporaryEquipment: {}, vendors: {}, bas: {}, credentials: {}, openItems: "", notes: "" };
+    }
+
+    const dateStamp = tourData.tour_date || new Date().toISOString().slice(0, 10);
+    const tourHeader = `[Tour ${dateStamp}]`;
+
+    // Merge equipment fields. Append (don't overwrite) so prior intake data is preserved.
+    const nextEquipment = { ...(target.equipment || {}) };
+    Object.entries(tourData.equipment || {}).forEach(([key, val]) => {
+      if (!val || !String(val).trim()) return;
+      const existing = (nextEquipment[key] || "").trim();
+      const newEntry = `${tourHeader} ${String(val).trim()}`;
+      // Avoid duplicating an identical tour entry on re-file
+      if (existing.includes(newEntry)) return;
+      nextEquipment[key] = existing ? `${existing}\n\n${newEntry}` : newEntry;
+    });
+
+    // Same merge logic for temporary / rental equipment
+    const nextTemporary = { ...(target.temporaryEquipment || {}) };
+    Object.entries(tourData.temporaryEquipment || {}).forEach(([key, val]) => {
+      if (!val || !String(val).trim()) return;
+      const existing = (nextTemporary[key] || "").trim();
+      const newEntry = `${tourHeader} ${String(val).trim()}`;
+      if (existing.includes(newEntry)) return;
+      nextTemporary[key] = existing ? `${existing}\n\n${newEntry}` : newEntry;
+    });
+
+    // Append open issues to openItems
+    let nextOpenItems = (target.openItems || "").trim();
+    const issues = (tourData.open_issues || []).filter(Boolean);
+    if (issues.length) {
+      const issueBlock = `${tourHeader} Open issues from tour:\n${issues.map(i => "  - " + i).join("\n")}`;
+      if (!nextOpenItems.includes(issueBlock)) {
+        nextOpenItems = nextOpenItems ? `${nextOpenItems}\n\n${issueBlock}` : issueBlock;
+      }
+    }
+
+    // Append everything else (areas, personnel, follow-ups, raw observations) to notes
+    let nextNotes = (target.notes || "").trim();
+    const noteLines = [];
+    if (tourData.areas_walked && tourData.areas_walked.length) noteLines.push(`Areas walked: ${tourData.areas_walked.join(", ")}`);
+    if (tourData.personnel_present && tourData.personnel_present.length) noteLines.push(`Personnel present: ${tourData.personnel_present.join(", ")}`);
+    if (tourData.follow_ups && tourData.follow_ups.length) {
+      noteLines.push("Follow-ups:");
+      tourData.follow_ups.forEach(f => noteLines.push("  - " + f));
+    }
+    if (tourData.raw_observations && String(tourData.raw_observations).trim()) {
+      noteLines.push(`Raw observations: ${tourData.raw_observations}`);
+    }
+    if (noteLines.length) {
+      const noteBlock = `${tourHeader} Mechanical tour\n${noteLines.join("\n")}`;
+      if (!nextNotes.includes(noteBlock)) {
+        nextNotes = nextNotes ? `${nextNotes}\n\n${noteBlock}` : noteBlock;
+      }
+    }
+
+    const updated = {
+      ...target,
+      name: target.name || SITE_NAMES[tourTargetSite] || "",
+      equipment: nextEquipment,
+      temporaryEquipment: nextTemporary,
+      openItems: nextOpenItems,
+      notes: nextNotes,
+      updatedAt: Date.now(),
+    };
+
+    // Write back. If the site row didn't exist, append it.
+    let nextSites;
+    if (sites.find(s => s.code === tourTargetSite)) {
+      nextSites = sites.map(s => s.code === tourTargetSite ? updated : s);
+    } else {
+      nextSites = [...sites, updated];
+    }
+    LS.set("sites", nextSites);
+
+    // Tag the recording with the site code so it's findable later
+    if (active && active.id) {
+      const cur = overrides[active.id] || {};
+      const curSites = cur.manualSiteCodes || [];
+      if (!curSites.includes(tourTargetSite)) {
+        const nextOv = { ...overrides, [active.id]: { ...cur, manualSiteCodes: [...curSites, tourTargetSite] } };
+        setOverrides(nextOv);
+        LS.set("plaud_overrides", nextOv);
+      }
+    }
+
+    const filed = Object.values(nextEquipment).filter(Boolean).length + Object.values(nextTemporary).filter(Boolean).length;
+    setTourFileStatus(`Filed to ${tourTargetSite}. ${filed} equipment field(s) updated. View it in Sites → ${tourTargetSite}.`);
   };
 
   // Helper: build context preamble from user overrides if present
@@ -4084,6 +5199,50 @@ const RecordingsView = ({ apiKey, model }) => {
       prompt: d => `${userContext(d)}Generate a structured site report from this conversation. Sections: Date & Site, Personnel Present, Findings, Issues Identified, Actions Taken, Open Items, Recommendations. Use plain executive prose.\n\nRECORDING: ${d.userTitle || d.name}\n\nTRANSCRIPT:\n${d.transcript.slice(0, 12000)}` },
     { id: "decisions", icon: "target", label: "Key Decisions",
       prompt: d => `${userContext(d)}What decisions were made in this conversation? For each: the decision, who made it, the reasoning if stated, and any conditions attached. Skip anything that was only discussed without a clear decision.\n\nTRANSCRIPT:\n${d.transcript.slice(0, 12000)}` },
+    { id: "tour", icon: "hex", label: "Site Mechanical Tour",
+      structured: true,
+      prompt: d => `${userContext(d)}This is a transcript of Antoine walking a hospital mechanical room or plant space and dictating what he sees. Extract every piece of equipment and operational fact mentioned, organized by category. Return ONLY valid JSON, no preamble, no markdown fences, no commentary.
+
+Use this exact schema:
+
+{
+  "site_code": "MWHC | MGUH | MMMC | MUMH | MHH | MGSH | MSMHC | MSMH | MNRH | MFSHC | null",
+  "tour_date": "YYYY-MM-DD or null",
+  "areas_walked": ["e.g. Boiler Plant, North Penthouse, Chiller Room"],
+  "personnel_present": ["named individuals heard in the audio"],
+  "equipment": {
+    "boilers":            "free-text inventory — count, make/model, fuel, capacity, condition",
+    "chillers":           "free-text inventory — count, make/model, tonnage, refrigerant, condition",
+    "coolingTowers":      "free-text inventory — count, make/model, cells, capacity, condition",
+    "airHandlers":        "free-text inventory — count, locations, areas served, condition",
+    "generators":         "free-text inventory — count, make/model, fuel, kW rating, condition",
+    "firePumps":          "free-text inventory — type, gpm, condition",
+    "medAirCompressors":  "free-text inventory — count, make/model, condition",
+    "vacuumPumps":        "free-text inventory — count, make/model, condition",
+    "upsSystems":         "free-text inventory — count, kVA rating, condition",
+    "heatExchangers":     "free-text inventory — count, application, condition"
+  },
+  "temporaryEquipment": {
+    "tempBoilers":        "rental boilers on-site — vendor, capacity, on-site dates, cost if mentioned, reason (e.g. supplementing B3 during retube). Empty string if none.",
+    "tempChillers":       "rental chillers on-site — vendor, tonnage, on-site dates, cost, reason. Empty string if none.",
+    "tempCoolingTowers":  "rental cooling towers — vendor, capacity, on-site dates, reason. Empty string if none.",
+    "tempGenerators":     "rental generators — vendor, kW, on-site dates, reason (e.g. BGE outage support). Empty string if none."
+  },
+  "open_issues":     ["operational issues, deficiencies, or anomalies Antoine called out — one item per line"],
+  "follow_ups":      ["specific actions Antoine flagged for follow-up"],
+  "raw_observations": "any equipment or facts that don't fit the categories above — keep them, don't lose them"
+}
+
+RULES:
+- If a category was not mentioned, return empty string "" (not null) so existing site data isn't accidentally cleared.
+- For each populated category, write tight executive prose (not lists). Example: "3 Trane CenTraVac, 1200 tons each, R-134a, all in service; lead chiller showing 38% load on tour."
+- Be precise about counts and model numbers. If Antoine said "looks like three or four chillers", write "3-4 chillers (count to confirm)".
+- TEMPORARY equipment is anything rented, on-skid, trailer-mounted, or described as "temp", "rental", "supplementing", "Aggreko", "United Rentals", "Sunbelt", "Carrier Rental Systems", etc. Don't confuse with permanent assets.
+- Site code: pick from the 10 MedStar codes only if clearly identifiable in the transcript or user context. If unclear, return null and Antoine will pick.
+- Do not invent equipment. If Antoine didn't mention boilers, return "" for boilers.
+
+TRANSCRIPT:
+${d.transcript.slice(0, 16000)}` },
   ];
 
   const active = recordings.find(r => r.id === activeId);
@@ -4166,7 +5325,7 @@ const RecordingsView = ({ apiKey, model }) => {
     const ov = overrides[active.id] || {};
     return (
       <div style={{ padding: S.xxl, maxWidth: 1400, margin: "0 auto" }}>
-        <button onClick={() => { setActiveId(null); setDetail(null); setAiOutput(""); setEditingTitle(false); setEditingNotes(false); }}
+        <button onClick={() => { setActiveId(null); setDetail(null); setAiOutput(""); setTourData(null); setTourError(""); setTourTargetSite(""); setTourFileStatus(""); setEditingTitle(false); setEditingNotes(false); }}
           style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.6, cursor: "pointer", padding: 0, marginBottom: S.lg }}>
           ← BACK TO RECORDINGS
         </button>
@@ -4406,7 +5565,127 @@ const RecordingsView = ({ apiKey, model }) => {
                 </div>
               </Panel>
 
-              {aiOutput && (
+              {tourData && (
+                <Panel title="Site Mechanical Tour — Extracted" subtitle={tourData.tour_date ? `Tour date: ${tourData.tour_date}` : "Date not stated"} accent={T.cyan}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: S.md }}>
+                    {/* File-to-site control bar */}
+                    <div style={{ display: "flex", gap: S.sm, alignItems: "center", flexWrap: "wrap", padding: S.md, background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2 }}>
+                      <span style={{ ...TS.micro, color: T.textDim, letterSpacing: 1.2 }}>FILE TO SITE</span>
+                      <select value={tourTargetSite} onChange={e => setTourTargetSite(e.target.value)}
+                        style={{ background: T.bgRaised, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "6px 10px", borderRadius: 2 }}>
+                        <option value="">— pick site —</option>
+                        {SITE_CODES.map(c => <option key={c} value={c}>{c} — {SITE_NAMES[c]}</option>)}
+                      </select>
+                      <Btn size="sm" icon="check" variant="primary" onClick={fileTourToSite} disabled={!tourTargetSite}>Save to Site Profile</Btn>
+                      {tourData.site_code && tourData.site_code === tourTargetSite && (
+                        <span style={{ ...TS.micro, color: T.green, fontFamily: FF.mono, letterSpacing: 1.2 }}>✓ KERA DETECTED THIS SITE</span>
+                      )}
+                    </div>
+                    {tourFileStatus && (
+                      <div style={{ ...TS.body, color: tourFileStatus.startsWith("Filed") ? T.green : T.amber, fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", background: T.bgSunken, borderLeft: "3px solid " + (tourFileStatus.startsWith("Filed") ? T.green : T.amber), borderRadius: 2 }}>
+                        {tourFileStatus}
+                      </div>
+                    )}
+
+                    {/* Equipment preview */}
+                    {tourData.equipment && Object.entries(tourData.equipment).filter(([, v]) => v && String(v).trim()).length > 0 && (
+                      <div>
+                        <div style={{ ...TS.micro, color: T.brass, letterSpacing: 1.4, marginBottom: S.sm }}>EQUIPMENT EXTRACTED</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: S.sm }}>
+                          {Object.entries(tourData.equipment).filter(([, v]) => v && String(v).trim()).map(([k, v]) => (
+                            <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: S.md, padding: "8px 0", borderBottom: "1px solid " + T.borderFaint }}>
+                              <span style={{ ...TS.micro, color: T.textDim, letterSpacing: 1, fontFamily: FF.mono, paddingTop: 2 }}>{k.toUpperCase()}</span>
+                              <span style={{ ...TS.body, color: T.text, lineHeight: 1.55 }}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Temporary / rental equipment preview — flagged in amber to signal transient assets */}
+                    {tourData.temporaryEquipment && Object.entries(tourData.temporaryEquipment).filter(([, v]) => v && String(v).trim()).length > 0 && (
+                      <div style={{ background: T.amber + "11", border: "1px solid " + T.amber + "44", borderRadius: 2, padding: S.md }}>
+                        <div style={{ ...TS.micro, color: T.amber, letterSpacing: 1.4, marginBottom: S.sm }}>TEMPORARY / RENTAL EQUIPMENT ON-SITE</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: S.sm }}>
+                          {Object.entries(tourData.temporaryEquipment).filter(([, v]) => v && String(v).trim()).map(([k, v]) => {
+                            const label = ({ tempBoilers: "TEMP BOILERS", tempChillers: "TEMP CHILLERS", tempCoolingTowers: "TEMP COOLING TOWERS", tempGenerators: "TEMP GENERATORS" })[k] || k.toUpperCase();
+                            return (
+                              <div key={k} style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: S.md, padding: "4px 0", borderBottom: "1px solid " + T.amber + "22" }}>
+                                <span style={{ ...TS.micro, color: T.amber, letterSpacing: 1, fontFamily: FF.mono, paddingTop: 2 }}>{label}</span>
+                                <span style={{ ...TS.body, color: T.text, lineHeight: 1.55 }}>{v}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Areas + personnel */}
+                    {((tourData.areas_walked && tourData.areas_walked.length > 0) || (tourData.personnel_present && tourData.personnel_present.length > 0)) && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: S.md }}>
+                        {tourData.areas_walked && tourData.areas_walked.length > 0 && (
+                          <div>
+                            <div style={{ ...TS.micro, color: T.brass, letterSpacing: 1.4, marginBottom: 4 }}>AREAS WALKED</div>
+                            <div style={{ ...TS.body, color: T.text }}>{tourData.areas_walked.join(", ")}</div>
+                          </div>
+                        )}
+                        {tourData.personnel_present && tourData.personnel_present.length > 0 && (
+                          <div>
+                            <div style={{ ...TS.micro, color: T.brass, letterSpacing: 1.4, marginBottom: 4 }}>PERSONNEL</div>
+                            <div style={{ ...TS.body, color: T.text }}>{tourData.personnel_present.join(", ")}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Open issues */}
+                    {tourData.open_issues && tourData.open_issues.length > 0 && (
+                      <div>
+                        <div style={{ ...TS.micro, color: T.amber, letterSpacing: 1.4, marginBottom: S.sm }}>OPEN ISSUES · {tourData.open_issues.length}</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {tourData.open_issues.map((iss, i) => (
+                            <div key={i} style={{ ...TS.body, color: T.text, paddingLeft: S.md, position: "relative" }}>
+                              <span style={{ position: "absolute", left: 0, color: T.amber }}>◇</span>
+                              {iss}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Follow-ups */}
+                    {tourData.follow_ups && tourData.follow_ups.length > 0 && (
+                      <div>
+                        <div style={{ ...TS.micro, color: T.cyan, letterSpacing: 1.4, marginBottom: S.sm }}>FOLLOW-UPS · {tourData.follow_ups.length}</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {tourData.follow_ups.map((f, i) => (
+                            <div key={i} style={{ ...TS.body, color: T.text, paddingLeft: S.md, position: "relative" }}>
+                              <span style={{ position: "absolute", left: 0, color: T.cyan }}>→</span>
+                              {f}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Raw observations */}
+                    {tourData.raw_observations && String(tourData.raw_observations).trim() && (
+                      <div>
+                        <div style={{ ...TS.micro, color: T.textDim, letterSpacing: 1.4, marginBottom: 4 }}>OTHER OBSERVATIONS</div>
+                        <div style={{ ...TS.body, color: T.textDim, fontStyle: "italic", lineHeight: 1.55 }}>{tourData.raw_observations}</div>
+                      </div>
+                    )}
+                  </div>
+                </Panel>
+              )}
+
+              {tourError && (
+                <Panel title="Tour Extraction — Parse Issue" accent={T.amber}>
+                  <div style={{ ...TS.body, color: T.amber, fontFamily: FF.mono, fontSize: 12 }}>{tourError}</div>
+                </Panel>
+              )}
+
+              {aiOutput && !tourData && (
                 <Panel title="Output" action={
                   <Btn size="sm" icon="copy" onClick={() => navigator.clipboard?.writeText(aiOutput)}>Copy</Btn>
                 }>
@@ -4599,6 +5878,16 @@ const EMPTY_SITE = (code) => ({
     generators: "", firePumps: "", medAirCompressors: "", vacuumPumps: "",
     upsSystems: "", heatExchangers: "",
   },
+  // Temporary / rental equipment on-site. Tracked separately because these are
+  // transient assets with vendors, costs, and removal dates — not in the CMMS
+  // as permanent assets. Critical to surface during emergency events so
+  // leadership knows what supplemental capacity is in play.
+  temporaryEquipment: {
+    tempBoilers: "",
+    tempChillers: "",
+    tempCoolingTowers: "",
+    tempGenerators: "",
+  },
   vendors: {
     boilerPrimary: "", boilerBackup: "",
     chillerPrimary: "", chillerBackup: "",
@@ -4624,7 +5913,20 @@ const EMPTY_SITE = (code) => ({
 
 function getOrInitSites() {
   const stored = LS.get("sites", null);
-  if (stored && stored.length) return stored;
+  if (stored && stored.length) {
+    // Migrate older site rows that predate the temporaryEquipment block.
+    // Without this, existing users would see undefined errors when rendering.
+    let migrated = false;
+    const next = stored.map(s => {
+      if (!s.temporaryEquipment) {
+        migrated = true;
+        return { ...s, temporaryEquipment: { tempBoilers: "", tempChillers: "", tempCoolingTowers: "", tempGenerators: "" } };
+      }
+      return s;
+    });
+    if (migrated) LS.set("sites", next);
+    return next;
+  }
   const seeded = SITE_CODES.map(EMPTY_SITE);
   LS.set("sites", seeded);
   return seeded;
@@ -4639,6 +5941,12 @@ function formatSiteForContext(s, includeCredentials = false) {
 
   const equipLines = Object.entries(s.equipment || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
   if (equipLines.length) { lines.push("Equipment:"); lines.push(...equipLines); }
+
+  // Temporary equipment surfaces with a clear marker so Kera weighs it as
+  // active/transient (relevant for emergency event briefings, summer cooling
+  // readiness, outage planning).
+  const tempLines = Object.entries(s.temporaryEquipment || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
+  if (tempLines.length) { lines.push("Temporary / Rental Equipment on-site:"); lines.push(...tempLines); }
 
   const vendorLines = Object.entries(s.vendors || {}).filter(([k, v]) => v && v !== "").map(([k, v]) => `  - ${k}: ${v}`);
   if (vendorLines.length) { lines.push("Vendors:"); lines.push(...vendorLines); }
@@ -4682,6 +5990,12 @@ Output ONLY a single valid JSON object with this exact shape — no commentary, 
     "boilers": "...", "chillers": "...", "coolingTowers": "...", "airHandlers": "",
     "generators": "...", "firePumps": "...", "medAirCompressors": "...", "vacuumPumps": "...",
     "upsSystems": "", "heatExchangers": "..."
+  },
+  "temporaryEquipment": {
+    "tempBoilers": "rental boilers — vendor, capacity, dates on-site, reason. Empty string if none.",
+    "tempChillers": "rental chillers — vendor, tons, dates, reason. Empty string if none.",
+    "tempCoolingTowers": "rental cooling towers — vendor, capacity, dates. Empty string if none.",
+    "tempGenerators": "rental generators — vendor, kW, dates, reason. Empty string if none."
   },
   "vendors": {
     "boilerPrimary": "...", "boilerBackup": "...",
@@ -4848,6 +6162,7 @@ const SitesView = ({ apiKey, model }) => {
         ...existing,
         ...parsed,
         equipment: { ...existing.equipment, ...(parsed.equipment || {}) },
+        temporaryEquipment: { ...(existing.temporaryEquipment || {}), ...(parsed.temporaryEquipment || {}) },
         vendors: { ...existing.vendors, ...(parsed.vendors || {}) },
         bas: { ...existing.bas, ...(parsed.bas || {}) },
         credentials: { ...existing.credentials, ...(parsed.credentials || {}) },
@@ -5145,6 +6460,19 @@ const SiteDetail = ({ site, onBack, update, showCreds, setShowCreds }) => {
         ].map(([label, key]) => (
           <SiteRow key={key} label={label}>
             <SiteField value={site.equipment?.[key]} onChange={v => setField("equipment." + key, v)} mono />
+          </SiteRow>
+        ))}
+      </SiteSection>
+
+      <SiteSection title="Temporary / Rental Equipment On-Site" color={T.amber}>
+        {[
+          ["Temp Boilers",        "tempBoilers"],
+          ["Temp Chillers",       "tempChillers"],
+          ["Temp Cooling Towers", "tempCoolingTowers"],
+          ["Temp Generators",     "tempGenerators"],
+        ].map(([label, key]) => (
+          <SiteRow key={key} label={label}>
+            <SiteField value={site.temporaryEquipment?.[key]} onChange={v => setField("temporaryEquipment." + key, v)} mono />
           </SiteRow>
         ))}
       </SiteSection>
@@ -6048,6 +7376,7 @@ const App = () => {
           {view === "recordings" && <RecordingsView apiKey={apiKey} model={model} />}
           {view === "focus" && <FocusOS apiKey={apiKey} model={model} />}
           {view === "email" && <EmailView apiKey={apiKey} model={model} />}
+          {view === "contracts" && <ContractsView apiKey={apiKey} model={model} />}
           {view === "reports" && <ReportsView apiKey={apiKey} model={model} />}
           {view === "memory" && <MemoryView />}
           {view === "notes" && <NotesView />}
