@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>EXEC-OS // Twiney</title>
+<title>EXEC-OS // Antoine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -20,7 +20,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-  #root { height: 100vh; }
+  #root { height: 100vh; height: 100dvh; }
   @keyframes execspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes execos-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes execos-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.7; } }
@@ -77,6 +77,14 @@
   body.mobile-view #execos-hamburger { display: inline-flex !important; }
 
   /* Main content fills viewport on mobile */
+  /* App root: use 100dvh on supported browsers to fix iOS Safari's 100vh bug
+     (where 100vh includes area behind the URL bar, pushing content above the
+     visible viewport). 100vh stays as the fallback for older browsers. */
+  .execos-app-root {
+    height: 100vh;
+    height: 100dvh;
+  }
+
   body.mobile-view #execos-main { padding: 14px !important; }
 
   /* Stack 2/3-column grids vertically on mobile via attribute selector */
@@ -99,7 +107,10 @@
     align-items: stretch !important;
   }
 
-  /* Top bar — denser on mobile */
+  /* Top bar — denser on mobile. The topbar lives OUTSIDE the scroll container
+     (#execos-main is what scrolls), so it stays pinned at top of the root flex
+     column automatically. The 100dvh on .execos-app-root above prevents iOS
+     Safari's 100vh bug from pushing this above the visible viewport. */
   body.mobile-view #execos-topbar { padding: 10px 12px !important; }
   body.mobile-view #execos-topbar [data-topbar-search] { display: none !important; }
   body.mobile-view #execos-topbar [data-topbar-clock] { display: none !important; }
@@ -281,7 +292,7 @@ const FF = {
 // Kept under 1024 tokens? No — over 1024 to qualify for caching minimum.
 const SYSTEM_PROMPT_CORE = `You are Kera — Antoine's personal AI Chief of Staff inside EXEC-OS. If asked your name, you are Kera. EXEC-OS is the platform; Kera is who he is talking to.
 
-Antoine is Antoine W. Riley Sr. (also called Twiney), Director of Systems Maintenance at Crothall Healthcare, managing the full MedStar Health portfolio (10 hospitals: MWHC, MGUH, MMMC, MUMH, MHH, MGSH, MSMHC, MSMH, MNRH, MFSHC). He reports to Heather C. West. Active work includes Building X BAS controls (Limbach), summer cooling readiness, PM compliance libraries, the MWHC turnover checklist, and proprietary tools MedStarH2OLog and Load Lever.
+Antoine is Antoine W. Riley Sr., Director of Systems Maintenance at Crothall Healthcare, managing the full MedStar Health portfolio (10 hospitals: MWHC, MGUH, MMMC, MUMH, MHH, MGSH, MSMHC, MSMH, MNRH, MFSHC). He reports to Heather C. West. Active work includes Building X BAS controls (Limbach), summer cooling readiness, PM compliance libraries, the MWHC turnover checklist, and proprietary tools MedStarH2OLog and Load Lever.
 
 VOICE: Direct. Technically precise. Executive-appropriate. Plain prose over bullet-heavy formats unless the deliverable demands a list. No hyphens as structural punctuation. Concise — every sentence earns its place. Do not over-narrate. Do not introduce yourself unless asked.
 
@@ -619,7 +630,7 @@ async function callClaude({ prompt, system = null, history = [], apiKey, model, 
   // Block 3: Long-term memory (stable across a session)
   const memories = LS.get("memories", []);
   if (memories.length) {
-    const memText = "# LONG-TERM MEMORY\nThings Twiney has explicitly asked you to remember. Use these naturally when relevant.\n" +
+    const memText = "# LONG-TERM MEMORY\nThings Antoine has explicitly asked you to remember. Use these naturally when relevant.\n" +
       memories.map((m, i) => `${i + 1}. ${m.text}`).join("\n");
     stableBlocks.push({ type: "text", text: memText });
   }
@@ -1377,7 +1388,7 @@ function computeKpis(tasks, sites, audit) {
   const openTasks = tasks.filter(t => !TaskUtil.isDone(t));
   const overdue = tasks.filter(TaskUtil.isOverdue);
   const blocked = tasks.filter(t => TaskUtil.isBlocked(t) && !TaskUtil.isDone(t));
-  const mine = openTasks.filter(t => /antoine|riley|twiney/i.test(t.owner || ""));
+  const mine = openTasks.filter(t => /antoine|riley/i.test(t.owner || ""));
   const completedRecent = tasks.filter(t => {
     if (!TaskUtil.isDone(t)) return false;
     const end = t.raw?.["End Date"];
@@ -1576,7 +1587,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
     if (filter === "overdue") return TaskUtil.isOverdue(t);
     if (filter === "high") return TaskUtil.isHigh(t) && !TaskUtil.isDone(t);
     if (filter === "blocked") return TaskUtil.isBlocked(t) && !TaskUtil.isDone(t);
-    if (filter === "mine") return /antoine|riley|twiney/i.test(t.owner || "") && !TaskUtil.isDone(t);
+    if (filter === "mine") return /antoine|riley/i.test(t.owner || "") && !TaskUtil.isDone(t);
     return !TaskUtil.isDone(t);
   });
 
@@ -1681,7 +1692,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
 
             // --- Smartsheet tasks filtered to ANTOINE ONLY ---
             const isDone = (s) => /complete|done|closed/i.test(s || "");
-            const isMine = (t) => /antoine|riley|twiney/i.test(t.owner || "");
+            const isMine = (t) => /antoine|riley/i.test(t.owner || "");
             const myOpen = (tasks || []).filter(t => isMine(t) && !isDone(t.status));
             const myOverdue = myOpen.filter(t => {
               if (!t.dueDate) return false;
@@ -1707,7 +1718,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
               .slice(0, 3);
 
             const ctxLines = [
-              `Today is ${dateStr}. Give Twiney his daily executive briefing — focused on HIM, not the whole portfolio.`,
+              `Today is ${dateStr}. Give Antoine his daily executive briefing — focused on HIM, not the whole portfolio.`,
               ``,
             ];
 
@@ -1768,7 +1779,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
             }
 
             ctxLines.push(``,
-              `Brief Twiney in plain executive prose. Lead with what he needs to handle today — calendar first, then TODO list, then his Smartsheet tasks. ` +
+              `Brief Antoine in plain executive prose. Lead with what he needs to handle today — calendar first, then TODO list, then his Smartsheet tasks. ` +
               `Treat the portfolio context section as situational awareness, not as items he must personally action. ` +
               `End with the top 3 things HE should personally do today, in order. ` +
               `Match his voice: direct, technically precise, no hyphens as structure, no unnecessary bullets unless there's a real list.`
@@ -2897,7 +2908,7 @@ ${em.text_body || em.html_body || "(no body)"}`;
     },
     { id: "summarize", label: "Summarize Thread", icon: "file",
       run: async (em) => {
-        const prompt = `Summarize this forwarded email thread for Twiney in 4 sentences max. Plain prose. Then add a one-line "What you owe:" if Twiney has an action.
+        const prompt = `Summarize this forwarded email thread for Antoine in 4 sentences max. Plain prose. Then add a one-line "What you owe:" if Antoine has an action.
 
 EMAIL:
 From: ${em.from_addr || ""}
@@ -2921,7 +2932,7 @@ ${em.text_body || em.html_body || ""}`;
     },
     { id: "task", label: "Create Task (Draft)", icon: "check",
       run: async (em) => {
-        const prompt = `Convert this email into a single Smartsheet task entry for Twiney's priority tracker. Return the fields as plain text:
+        const prompt = `Convert this email into a single Smartsheet task entry for Antoine's priority tracker. Return the fields as plain text:
 
 Task: (one-line title)
 Owner: (best guess based on email)
@@ -2940,7 +2951,7 @@ ${em.text_body || em.html_body || ""}`;
     },
     { id: "reply", label: "Draft Reply", icon: "send",
       run: async (em) => {
-        const prompt = `Draft a professional reply to this email in Twiney's voice — direct, technically precise, executive-appropriate. Plain prose, no bullets unless content requires them.
+        const prompt = `Draft a professional reply to this email in Antoine's voice — direct, technically precise, executive-appropriate. Plain prose, no bullets unless content requires them.
 
 EMAIL:
 From: ${em.from_addr || ""}
@@ -2969,9 +2980,9 @@ ${em.text_body || em.html_body || ""}`;
 
   const actions = [
     { id:"summarize", label:"Summarize", icon:"file", prompt: e => `Summarize this email thread for an executive. 3 lines max. Then list any commitments, blockers, and unanswered questions.\n\n---\n${e}` },
-    { id:"draft", label:"Draft Reply", icon:"send", prompt: e => `Draft a professional reply to this email in Twiney's voice — direct, executive-appropriate, plain prose. No bullets unless content requires them.\n\n---\n${e}` },
-    { id:"firm", label:"Firm Reply", icon:"tri", prompt: e => `Draft a firm but professional reply. Hold the line, request what's needed in writing, no softening. Twiney's voice.\n\n---\n${e}` },
-    { id:"escalate", label:"Escalate", icon:"alert", prompt: e => `Draft an escalation message to leadership about the issue in this email. Open with the operational risk, then 2-3 sentences of context, then the specific decision or support needed. Twiney's voice.\n\n---\n${e}` },
+    { id:"draft", label:"Draft Reply", icon:"send", prompt: e => `Draft a professional reply to this email in Antoine's voice — direct, executive-appropriate, plain prose. No bullets unless content requires them.\n\n---\n${e}` },
+    { id:"firm", label:"Firm Reply", icon:"tri", prompt: e => `Draft a firm but professional reply. Hold the line, request what's needed in writing, no softening. Antoine's voice.\n\n---\n${e}` },
+    { id:"escalate", label:"Escalate", icon:"alert", prompt: e => `Draft an escalation message to leadership about the issue in this email. Open with the operational risk, then 2-3 sentences of context, then the specific decision or support needed. Antoine's voice.\n\n---\n${e}` },
     { id:"actions", label:"Action List", icon:"list", prompt: e => `Convert this email into a numbered action list. Each action: owner, action, due date if stated. End with one line on any blockers.\n\n---\n${e}` },
     { id:"commitments", label:"Commitments", icon:"check", prompt: e => `Extract every commitment made in this email thread — by whom, what, by when. Then flag any that look at risk.\n\n---\n${e}` },
   ];
@@ -3144,12 +3155,12 @@ ${em.text_body || em.html_body || ""}`;
     try {
       // ===== PASS 1: individual analysis of each email =====
       setInvestigationStage("Reading each email...");
-      const focusClause = focusQuestion.trim() ? `\n\nFOCUS QUESTION FROM TWINEY: ${focusQuestion.trim()}\nKeep this in mind but still do a complete read.` : "";
+      const focusClause = focusQuestion.trim() ? `\n\nFOCUS QUESTION FROM ANTOINE: ${focusQuestion.trim()}\nKeep this in mind but still do a complete read.` : "";
       const perEmailAnalyses = [];
       for (let i = 0; i < populated.length; i++) {
         const em = populated[i];
         const imageAttachments = em.files.filter(f => f.kind === "image" || f.kind === "pdf");
-        const prompt = `You are Kera, executive AI for Antoine "Twiney" Riley Sr., Director of Systems Maintenance at Crothall/MedStar (10 MedStar hospitals).
+        const prompt = `You are Kera, executive AI for Antoine Riley Sr., Director of Systems Maintenance at Crothall/MedStar (10 MedStar hospitals).
 
 Analyze ONE email thread thoroughly. This is pass 1 of 2 — focused on THIS thread alone. Be exhaustive.
 
@@ -3159,7 +3170,7 @@ Cover these dimensions:
 3. **Surface content** — what is literally being said, point by point
 4. **Subtext** — what is being implied, avoided, hinted at, or left unsaid. Read between the lines. Tone, hedging, escalation cues.
 5. **Commitments made** — by whom, what, by when (cite the words if possible)
-6. **Asks / Demands** — what is being requested of Twiney or of others
+6. **Asks / Demands** — what is being requested of Antoine or of others
 7. **Risks / Liabilities** — operational, financial, regulatory, reputational
 8. **Key players** — anyone named, their role, and their position in the thread
 9. **Evidence / Numbers / Dates** — anything specific worth flagging
@@ -3186,12 +3197,12 @@ ${em.files.length ? "\nATTACHED FILES: " + em.files.map(f => f.name).join(", ") 
 
       // ===== PASS 2: synthesis across all emails =====
       setInvestigationStage("Cross-referencing all emails...");
-      const synthesisPrompt = `You are Kera. You've just analyzed ${populated.length} email thread${populated.length > 1 ? "s" : ""} individually for Twiney. Now synthesize a thorough cross-cutting investigation.
+      const synthesisPrompt = `You are Kera. You've just analyzed ${populated.length} email thread${populated.length > 1 ? "s" : ""} individually for Antoine. Now synthesize a thorough cross-cutting investigation.
 
 You will produce a structured analysis report with these sections, in this exact order, each with a clear header:
 
 ## EXECUTIVE SUMMARY
-3-5 sentences. The most important thing Twiney needs to know.
+3-5 sentences. The most important thing Antoine needs to know.
 
 ## TIMELINE
 Order events chronologically across all threads. Who said what, when. Note gaps and silences.
@@ -3214,16 +3225,16 @@ Operational, financial, regulatory, reputational. Specific to the MedStar / Crot
 ## CONFLICTS & CONTRADICTIONS
 Where do the emails contradict each other or themselves? Where do words and actions diverge?
 
-## ACTION ITEMS FOR TWINEY
+## ACTION ITEMS FOR ANTOINE
 Numbered list. Each item: action, owner, urgency, why.
 
 ## RECOMMENDED RESPONSE STRATEGY
-How Twiney should approach this — the order of moves, who to talk to first, what to put in writing, what to hold back. Be tactical.
+How Antoine should approach this — the order of moves, who to talk to first, what to put in writing, what to hold back. Be tactical.
 
-## QUESTIONS TWINEY SHOULD ASK BEFORE RESPONDING
+## QUESTIONS ANTOINE SHOULD ASK BEFORE RESPONDING
 The questions whose answers would change the strategy. Make him think.
 
-Use plain prose within sections. Be exhaustive — Twiney asked you to investigate THOROUGHLY, so do not under-deliver. This is not a summary; it is a deep read.${focusClause}
+Use plain prose within sections. Be exhaustive — Antoine asked you to investigate THOROUGHLY, so do not under-deliver. This is not a summary; it is a deep read.${focusClause}
 
 ---
 INDIVIDUAL ANALYSES TO SYNTHESIZE:
@@ -3780,9 +3791,9 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
 // - On new investigation, prior contracts from the SAME vendor are injected as
 //   context so Kera applies pattern recognition across the relationship
 // - "Lessons Learned" array gets auto-extracted and accumulated — recurring
-//   red flags Twiney has flagged before bubble up automatically next time
+//   red flags Antoine has flagged before bubble up automatically next time
 // - Search across the entire history (vendor, title, body, findings)
-// - User corrections (Twiney pushing back on a finding) feed back into the
+// - User corrections (Antoine pushing back on a finding) feed back into the
 //   knowledge file as USER VERIFIED so future investigations weight them
 // ============================================================
 const ContractsView = ({ apiKey, model }) => {
@@ -3921,25 +3932,25 @@ const ContractsView = ({ apiKey, model }) => {
       const priors = priorSameVendor.length ? priorSameVendor : recent;
 
       const priorContext = priors.length === 0 ? "" :
-        "\n\n# PRIOR CONTRACT INVESTIGATIONS (apply pattern recognition; Twiney has been here before)\n" +
+        "\n\n# PRIOR CONTRACT INVESTIGATIONS (apply pattern recognition; Antoine has been here before)\n" +
         priors.map((inv, i) => (
           `## Prior #${i + 1} — ${inv.vendor || "(no vendor)"} · ${inv.title || "(no title)"} · ${new Date(inv.createdAt).toLocaleDateString()}\n` +
           `Key findings:\n${(inv.keyFindings || []).map(f => `  - ${f}`).join("\n") || "  (none recorded)"}\n` +
-          (inv.userNotes ? `Twiney's correction notes (USER VERIFIED — weight heavily):\n${inv.userNotes}\n` : "")
+          (inv.userNotes ? `Antoine's correction notes (USER VERIFIED — weight heavily):\n${inv.userNotes}\n` : "")
         )).join("\n\n");
 
       const lessonsContext = lessonsLearned.length === 0 ? "" :
-        "\n\n# LESSONS LEARNED (recurring red flags Twiney has flagged historically — surface aggressively when relevant)\n" +
+        "\n\n# LESSONS LEARNED (recurring red flags Antoine has flagged historically — surface aggressively when relevant)\n" +
         lessonsLearned.map((l, i) => `${i + 1}. ${l.lesson}` + (l.source ? `  (from: ${l.source})` : "")).join("\n");
 
-      const focusClause = focusInstruction.trim() ? `\n\nFOCUS FROM TWINEY: ${focusInstruction.trim()}\nIntegrate this focus throughout the investigation. Do not skip the rest of the standard review.` : "";
+      const focusClause = focusInstruction.trim() ? `\n\nFOCUS FROM ANTOINE: ${focusInstruction.trim()}\nIntegrate this focus throughout the investigation. Do not skip the rest of the standard review.` : "";
 
       const imageAttachments = contractFiles.filter(f => f.kind === "image" || f.kind === "pdf");
 
       // PASS 1 — full attorney-grade investigation
       setStage("Investigating like a seasoned attorney...");
 
-      const prompt = `You are Kera, acting as a seasoned contract attorney advising Antoine "Twiney" Riley Sr., Director of Systems Maintenance at Crothall Healthcare (MedStar Health portfolio, 10 hospitals). You have spent twenty years reviewing facilities and vendor agreements in the healthcare environment. You are thorough, conservative, plainspoken, and protective of Twiney's interests.
+      const prompt = `You are Kera, acting as a seasoned contract attorney advising Antoine Riley Sr., Director of Systems Maintenance at Crothall Healthcare (MedStar Health portfolio, 10 hospitals). You have spent twenty years reviewing facilities and vendor agreements in the healthcare environment. You are thorough, conservative, plainspoken, and protective of Antoine's interests.
 
 Read this contract and produce a complete attorney-grade investigation. Use this exact structure, with each section as a clear header in CAPS:
 
@@ -3968,7 +3979,7 @@ Required coverage types and minimum limits. Additional insured language. Primary
 Express warranties given. Implied warranty disclaimers. Remedy limitations. Time-bar on claims. Whether the warranty period actually covers the asset's useful life.
 
 ## INTELLECTUAL PROPERTY
-Who owns what. Work-for-hire? License grants? Pre-existing IP carve-outs? Data ownership — particularly important if the contract touches MedStarH2OLog, Load Lever, BAS data, or any operational data Twiney's team generates.
+Who owns what. Work-for-hire? License grants? Pre-existing IP carve-outs? Data ownership — particularly important if the contract touches MedStarH2OLog, Load Lever, BAS data, or any operational data Antoine's team generates.
 
 ## CONFIDENTIALITY & DATA
 NDA reach, duration, surviving obligations. PHI/HIPAA exposure if hospital systems touch it. Data security minimums. Breach notification timeline.
@@ -3998,7 +4009,7 @@ Plain prose within each section. Quote contract language when wording is the iss
 
 ---
 CONTRACT BEING REVIEWED:
-${vendor ? "Vendor (per Twiney): " + vendor + "\n" : ""}${title ? "Title (per Twiney): " + title + "\n" : ""}
+${vendor ? "Vendor (per Antoine): " + vendor + "\n" : ""}${title ? "Title (per Antoine): " + title + "\n" : ""}
 ${contractText || "(See attached document)"}
 ---`;
 
@@ -4466,7 +4477,7 @@ const ReportsView = ({ apiKey, model }) => {
     if (!context.trim() || loading) return;
     setLoading(true); setOutput("");
     const tmpl = templates[type];
-    const prompt = `Generate a polished executive ${tmpl.name} for Twiney's MedStar portfolio. Use these sections in this order:\n\n${tmpl.sections.map((s, i) => (i + 1) + ". " + s).join("\n")}\n\nCONTEXT FROM TWINEY:\n${context}\n\nWrite in plain executive prose. Each section gets a short header in CAPS followed by the body. No bullets unless the data demands a list. Be concrete. If you don't have specifics, leave a clearly marked [TBD: specific item] placeholder rather than fabricating.`;
+    const prompt = `Generate a polished executive ${tmpl.name} for Antoine's MedStar portfolio. Use these sections in this order:\n\n${tmpl.sections.map((s, i) => (i + 1) + ". " + s).join("\n")}\n\nCONTEXT FROM ANTOINE:\n${context}\n\nWrite in plain executive prose. Each section gets a short header in CAPS followed by the body. No bullets unless the data demands a list. Be concrete. If you don't have specifics, leave a clearly marked [TBD: specific item] placeholder rather than fabricating.`;
     try { setOutput(await callClaude({ prompt, apiKey, model })); }
     catch (e) { setOutput("Error: " + e.message); }
     finally { setLoading(false); }
@@ -5775,7 +5786,7 @@ const RecordingsView = ({ apiKey, model }) => {
             || (detail.siteCodes && detail.siteCodes[0])
             || "";
           if (candidate && SITE_CODES.includes(candidate)) setTourTargetSite(candidate);
-          // Keep the raw text available too in case Twiney wants to copy it
+          // Keep the raw text available too in case Antoine wants to copy it
           setAiOutput(out);
         } catch (parseErr) {
           // Fall back gracefully — show the raw output and let Antoine see what came back
@@ -7596,7 +7607,7 @@ const HelpView = () => {
       tags: "contracts contract investigation vendor legal review attorney clause indemnity risk negotiate",
       body: (
         <div>
-          <p>The Contracts view runs every contract, MSA, SOW, or vendor agreement Twiney needs to evaluate through a seasoned-attorney-style review in under a minute. It produces structured findings, surfaces red flags, and remembers prior investigations so the second contract from the same vendor gets compared against the first automatically.</p>
+          <p>The Contracts view runs every contract, MSA, SOW, or vendor agreement Antoine needs to evaluate through a seasoned-attorney-style review in under a minute. It produces structured findings, surfaces red flags, and remembers prior investigations so the second contract from the same vendor gets compared against the first automatically.</p>
           <p style={{ marginTop: 12 }}><b>What you can do here:</b></p>
           <ul>
             <li>Paste contract text directly or upload files (text, image, PDF) — Kera handles all three via Claude's vision model.</li>
@@ -7606,7 +7617,7 @@ const HelpView = () => {
             <li>Save the investigation to history. Future contracts will compare against it automatically when from the same vendor.</li>
             <li>Add lessons learned — recurring red flags get surfaced aggressively in future investigations.</li>
           </ul>
-          <p style={{ marginTop: 12, color: T.brass }}><b>How it gets smarter:</b> every investigation Twiney saves becomes context for the next one. After the third or fourth contract with the same vendor, Kera will flag patterns: "This vendor consistently buries the auto-renewal in section 12.3 — same pattern as the 2025 agreement."</p>
+          <p style={{ marginTop: 12, color: T.brass }}><b>How it gets smarter:</b> every investigation Antoine saves becomes context for the next one. After the third or fourth contract with the same vendor, Kera will flag patterns: "This vendor consistently buries the auto-renewal in section 12.3 — same pattern as the 2025 agreement."</p>
           <p style={{ marginTop: 12 }}><b>Signing guidance values:</b></p>
           <ul>
             <li><b>SIGN AS-IS</b> — Clean contract, no concerns.</li>
@@ -7625,7 +7636,7 @@ const HelpView = () => {
       tags: "calendar schedule event project meeting site visit PM vendor planning month week agenda",
       body: (
         <div>
-          <p>The Calendar is Twiney's project and site-planning grid. It is fully manual — no external sync. Type events in, they live in your workspace, they sync across your devices through Cloud Sync.</p>
+          <p>The Calendar is Antoine's project and site-planning grid. It is fully manual — no external sync. Type events in, they live in your workspace, they sync across your devices through Cloud Sync.</p>
           <p style={{ marginTop: 12 }}><b>Three views:</b></p>
           <ul>
             <li><b>Month</b> — Standard Outlook-style grid. Click any day to create an event. Click any event pill to edit.</li>
@@ -8760,7 +8771,7 @@ const App = () => {
   }
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }} className="execos-app-root">
       <TopBar onOpenPalette={() => setPalette(true)} onOpenSettings={() => setSettings(true)} hasKey={!!apiKey} onToggleSidebar={() => setSidebarOpen(o => !o)} />
       <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         <div id="execos-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
