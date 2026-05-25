@@ -635,13 +635,58 @@ async function callClaude({ prompt, system = null, history = [], apiKey, model, 
     stableBlocks.push({ type: "text", text: memText });
   }
 
-  // Block 4: Pinned notes (stable across a session)
+  // Block 4: Notes — tiered injection so Kera sees ALL your knowledge, not just
+  // pinned. Pinned and "active" notes go in FULL (these are what you're working
+  // on right now). Everything else goes in as a one-line index (title + first
+  // ~200 chars) so Kera knows what exists and can ask for the full text if she
+  // needs it. Hard char cap prevents costs from spiraling as the notes pile up.
   const notes = LS.get("notes", []);
-  const pinnedNotes = notes.filter(n => n.pinned);
-  if (pinnedNotes.length) {
-    const noteText = "# PINNED REFERENCE DOCUMENTS\nThe user has pinned these as active context.\n" +
-      pinnedNotes.map(n => `## ${n.title}\n${n.body.slice(0, 6000)}`).join("\n\n");
-    stableBlocks.push({ type: "text", text: noteText });
+  if (notes.length) {
+    const NOTE_BUDGET = 40000; // hard cap on total note context (~10K tokens)
+    const pinnedNotes = notes.filter(n => n.pinned);
+    const activeNotes = notes.filter(n => !n.pinned && n.active);
+    const otherNotes = notes.filter(n => !n.pinned && !n.active);
+
+    const parts = ["# NOTES — YOUR KNOWLEDGE BASE",
+      "These are the user's working notes. Treat them as authoritative for project status, decisions, vendor details, and anything they've recorded. When asked for an update, status, or recommendation on a project, scan the matching notes first. Cite which note(s) you're drawing from when relevant."];
+    let used = 0;
+    const fmtNote = (n, truncate) => {
+      const header = `## ${n.title || "(untitled)"}${n.project ? "  ·  [project: " + n.project + "]" : ""}${n.updatedAt ? "  ·  [updated: " + new Date(n.updatedAt).toISOString().slice(0, 10) + "]" : ""}`;
+      const body = truncate ? (n.body || "").slice(0, truncate) + ((n.body || "").length > truncate ? " …" : "") : (n.body || "");
+      return header + "\n" + body;
+    };
+
+    if (pinnedNotes.length) {
+      parts.push("\n### ★ PINNED (always in active context)");
+      for (const n of pinnedNotes) {
+        const t = fmtNote(n, 6000);
+        if (used + t.length > NOTE_BUDGET) break;
+        parts.push(t); used += t.length;
+      }
+    }
+    if (activeNotes.length && used < NOTE_BUDGET) {
+      parts.push("\n### ⏵ ACTIVE PROJECTS (recent work, full text)");
+      // Sort active by updatedAt desc so most recent is most prominent
+      const sorted = [...activeNotes].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+      for (const n of sorted) {
+        const t = fmtNote(n, 4000);
+        if (used + t.length > NOTE_BUDGET) break;
+        parts.push(t); used += t.length;
+      }
+    }
+    if (otherNotes.length && used < NOTE_BUDGET) {
+      parts.push("\n### ☰ INDEX (titles + first lines — ask me for full text)");
+      const sorted = [...otherNotes].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+      for (const n of sorted) {
+        const t = fmtNote(n, 200);
+        if (used + t.length > NOTE_BUDGET) break;
+        parts.push(t); used += t.length;
+      }
+    }
+
+    if (parts.length > 2) {
+      stableBlocks.push({ type: "text", text: parts.join("\n\n") });
+    }
   }
 
   // Mark the last stable block with cache_control. Anthropic caches the cumulative
@@ -790,7 +835,17 @@ function getMonthlyUsage() {
   const now = new Date();
   const key = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
   const data = LS.get("monthly_tokens", {});
-  const m = data[key] || { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, calls: 0 };
+  // Per-field defaults — if a legacy entry is missing cacheCreate/cacheRead
+  // (from before those fields existed) we MUST coerce to 0, not let the
+  // multiplication propagate NaN through the entire usage calculation.
+  const raw = data[key] || {};
+  const m = {
+    input: Number(raw.input) || 0,
+    output: Number(raw.output) || 0,
+    cacheCreate: Number(raw.cacheCreate) || 0,
+    cacheRead: Number(raw.cacheRead) || 0,
+    calls: Number(raw.calls) || 0,
+  };
   const budget = parseInt(LS.get("token_budget", 0), 10) || 0;
   // Effective "billable" input tokens for budget tracking:
   // Cache hits cost 10% of input, cache writes cost 125% — so weight them.
@@ -1001,6 +1056,10 @@ const UsageIndicator = () => {
   // No budget set → hide entirely. Indicator is opt-in.
   if (!usage.budget || usage.budget <= 0) return null;
 
+  // Guard against NaN — if percent is null/NaN for any reason, hide the chip
+  // rather than show "NaN%". Better to be silent than wrong.
+  if (usage.percent === null || !Number.isFinite(usage.percent)) return null;
+
   const pct = Math.round(usage.percent);
   const over = pct > 100;
   const color = pct >= 95 ? T.red : pct >= 75 ? T.amber : T.textDim;
@@ -1067,6 +1126,109 @@ const UsageIndicator = () => {
         </div>
       )}
     </div>
+  );
+};
+
+// Reusable Paste button — reads from clipboard via the Clipboard API.
+// On success calls onPaste(text). Shows brief visual feedback ("Pasted!" / "Denied"
+// / "Empty") so the user knows what happened. Falls back gracefully on browsers
+// that don't allow clipboard reads (older Safari, certain mobile contexts).
+const PasteButton = ({ onPaste, label = "Paste", size = "sm", style = {} }) => {
+  const [status, setStatus] = useState("idle");
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text || !text.trim()) {
+        setStatus("empty");
+        setTimeout(() => setStatus("idle"), 1800);
+        return;
+      }
+      onPaste(text);
+      setStatus("ok");
+      setTimeout(() => setStatus("idle"), 1500);
+    } catch (e) {
+      // Permission denied or unsupported (older Safari, http context, iframe restrictions).
+      setStatus("denied");
+      setTimeout(() => setStatus("idle"), 2200);
+    }
+  };
+  const isSmall = size === "sm";
+  const styleByStatus = {
+    idle:   { background: T.bgSunken, color: T.textDim, border: "1px solid " + T.border },
+    ok:     { background: T.green + "22", color: T.green, border: "1px solid " + T.green },
+    empty:  { background: T.amber + "22", color: T.amber, border: "1px solid " + T.amber },
+    denied: { background: T.red + "22", color: T.red, border: "1px solid " + T.red },
+  };
+  const labelByStatus = { idle: label, ok: "Pasted!", empty: "Clipboard empty", denied: "Permission denied" };
+  return (
+    <button onClick={handlePaste} title="Paste from clipboard" style={{
+      ...styleByStatus[status],
+      fontFamily: FF.mono,
+      fontSize: isSmall ? 10 : 11,
+      letterSpacing: 1.2,
+      textTransform: "uppercase",
+      padding: isSmall ? "5px 10px" : "7px 14px",
+      borderRadius: 2,
+      cursor: "pointer",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      transition: "background 0.15s, color 0.15s, border-color 0.15s",
+      ...style,
+    }}>
+      <Icon name={status === "ok" ? "check" : "file"} size={isSmall ? 11 : 12} />
+      {labelByStatus[status]}
+    </button>
+  );
+};
+
+// Reusable Copy button — writes given text to clipboard.
+const CopyButton = ({ text, label = "Copy", size = "sm", style = {} }) => {
+  const [status, setStatus] = useState("idle");
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text || "");
+      setStatus("ok");
+      setTimeout(() => setStatus("idle"), 1500);
+    } catch (e) {
+      // Fallback: legacy execCommand for older browsers / iframe restrictions
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text || "";
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        setStatus(ok ? "ok" : "denied");
+      } catch {
+        setStatus("denied");
+      }
+      setTimeout(() => setStatus("idle"), 2200);
+    }
+  };
+  const isSmall = size === "sm";
+  const styleByStatus = {
+    idle:   { background: T.bgSunken, color: T.textDim, border: "1px solid " + T.border },
+    ok:     { background: T.green + "22", color: T.green, border: "1px solid " + T.green },
+    denied: { background: T.red + "22", color: T.red, border: "1px solid " + T.red },
+  };
+  const labelByStatus = { idle: label, ok: "Copied!", denied: "Permission denied" };
+  return (
+    <button onClick={handleCopy} title="Copy to clipboard" disabled={!text} style={{
+      ...styleByStatus[status],
+      fontFamily: FF.mono, fontSize: isSmall ? 10 : 11, letterSpacing: 1.2, textTransform: "uppercase",
+      padding: isSmall ? "5px 10px" : "7px 14px", borderRadius: 2,
+      cursor: text ? "pointer" : "not-allowed",
+      opacity: text ? 1 : 0.4,
+      display: "inline-flex", alignItems: "center", gap: 6,
+      transition: "background 0.15s, color 0.15s, border-color 0.15s",
+      ...style,
+    }}>
+      <Icon name={status === "ok" ? "check" : "file"} size={isSmall ? 11 : 12} />
+      {labelByStatus[status]}
+    </button>
   );
 };
 
@@ -2045,8 +2207,18 @@ const Dashboard = ({ onJump, apiKey, model }) => {
               <span style={{ ...TS.body, color: T.textDim }}>AI calls today</span>
               <span style={{ ...TS.data, fontFamily: FF.mono, color: T.text, fontVariantNumeric: "tabular-nums" }}>{kpis.auditTodayCount}</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0`, borderBottom: "1px solid " + T.borderFaint }}>
-              <span style={{ ...TS.body, color: T.textDim }}>Errors</span>
+            <div onClick={() => {
+              if (kpis.auditErrors > 0) {
+                LS.set("audit_filter_oneshot", "errors");
+                onJump("audit");
+              }
+            }} style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0`, borderBottom: "1px solid " + T.borderFaint, cursor: kpis.auditErrors > 0 ? "pointer" : "default", borderRadius: 2, transition: "background 0.12s" }}
+              onMouseEnter={e => { if (kpis.auditErrors > 0) e.currentTarget.style.background = T.red + "08"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+              <span style={{ ...TS.body, color: T.textDim, display: "flex", alignItems: "center", gap: 6 }}>
+                Errors
+                {kpis.auditErrors > 0 && <span style={{ fontFamily: FF.mono, fontSize: 9, color: T.red, letterSpacing: 1.2 }}>→ VIEW</span>}
+              </span>
               <span style={{ ...TS.data, fontFamily: FF.mono, color: kpis.auditErrors > 0 ? T.red : T.text, fontVariantNumeric: "tabular-nums" }}>{kpis.auditErrors}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: `${S.sm}px 0`, borderBottom: "1px solid " + T.borderFaint }}>
@@ -2606,6 +2778,11 @@ const TerminalView = ({ apiKey, model }) => {
             padding: `${S.md}px 0`,
             outline: "none",
           }} />
+        {/* Paste button — quick clipboard insert without leaving keyboard. Appends so
+            user can paste-then-add their own context before sending. */}
+        {!convoActive && (
+          <PasteButton onPaste={(t) => setInput(input ? input + " " + t : t)} label="Paste" style={{ marginRight: 6 }} />
+        )}
         <Btn icon="send" variant="primary" onClick={() => send()} loading={loading} disabled={convoActive}>Send</Btn>
       </div>
     </div>
@@ -3436,6 +3613,20 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
       {mode === "single" && (
         <div data-grid="2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Panel title="Source Email" subtitle={quickFiles.length > 0 ? `${quickFiles.length} attachment${quickFiles.length === 1 ? "" : "s"}` : null}>
+            {/* Paste / Copy controls — quick clipboard access for the email body */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <PasteButton onPaste={(t) => setEmailText(emailText ? emailText + "\n\n" + t : t)} label="Paste Email" />
+              {emailText && (
+                <CopyButton text={emailText} label="Copy" />
+              )}
+              {emailText && (
+                <button onClick={() => setEmailText("")} title="Clear email body" style={{
+                  background: "transparent", color: T.textFaint, border: "1px solid " + T.borderFaint,
+                  fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase",
+                  padding: "5px 10px", borderRadius: 2, cursor: "pointer",
+                }}>Clear</button>
+              )}
+            </div>
             <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={12}
               style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
 
@@ -3519,6 +3710,18 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
                   placeholder="Label this email (sender / topic / date)"
                   style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 2, width: "100%" }}
                 />
+                {/* Paste / Copy controls for this email card */}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <PasteButton onPaste={(t) => updateEmail(em.id, { text: em.text ? em.text + "\n\n" + t : t })} label="Paste Email" />
+                  {em.text && <CopyButton text={em.text} label="Copy" />}
+                  {em.text && (
+                    <button onClick={() => updateEmail(em.id, { text: "" })} title="Clear email body" style={{
+                      background: "transparent", color: T.textFaint, border: "1px solid " + T.borderFaint,
+                      fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase",
+                      padding: "5px 10px", borderRadius: 2, cursor: "pointer",
+                    }}>Clear</button>
+                  )}
+                </div>
                 <textarea
                   value={em.text}
                   onChange={e => updateEmail(em.id, { text: e.target.value })}
@@ -3778,6 +3981,18 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
                   </div>
 
                   {/* Body */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 1.4 }}>BODY</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <CopyButton text={activeInboxEmail.text_body || ""} label="Copy Body" />
+                      {activeInboxEmail.text_body && (
+                        <CopyButton
+                          text={`From: ${activeInboxEmail.from_name ? activeInboxEmail.from_name + " <" + activeInboxEmail.from_addr + ">" : activeInboxEmail.from_addr}\nTo: ${activeInboxEmail.to_addr}\nDate: ${activeInboxEmail.received_at ? new Date(activeInboxEmail.received_at).toLocaleString() : ""}\nSubject: ${activeInboxEmail.subject || ""}\n\n${activeInboxEmail.text_body}`}
+                          label="Copy w/ Headers"
+                        />
+                      )}
+                    </div>
+                  </div>
                   <div style={{ background: T.bgSunken, border: "1px solid " + T.borderFaint, borderRadius: 2, padding: 14, fontFamily: FF.mono, fontSize: 12, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 380, overflowY: "auto" }}>
                     {activeInboxEmail.text_body || "(no plain-text body)"}
                   </div>
@@ -4433,6 +4648,17 @@ ${reply.slice(0, 12000)}`;
               />
             </div>
 
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <PasteButton onPaste={(t) => setContractText(contractText ? contractText + "\n\n" + t : t)} label="Paste Contract" />
+              {contractText && <CopyButton text={contractText} label="Copy" />}
+              {contractText && (
+                <button onClick={() => setContractText("")} title="Clear contract text" style={{
+                  background: "transparent", color: T.textFaint, border: "1px solid " + T.borderFaint,
+                  fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase",
+                  padding: "5px 10px", borderRadius: 2, cursor: "pointer",
+                }}>Clear</button>
+              )}
+            </div>
             <textarea
               value={contractText}
               onChange={e => setContractText(e.target.value)}
@@ -4671,6 +4897,17 @@ const ReportsView = ({ apiKey, model }) => {
             <div style={{ marginTop: 6, fontFamily: FF.body, fontSize: 12, color: T.textDim, lineHeight: 1.7 }}>{templates[type].sections.join(" · ")}</div>
           </Panel>
           <Panel title="Context">
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <PasteButton onPaste={(t) => setContext(context ? context + "\n\n" + t : t)} label="Paste" />
+              {context && <CopyButton text={context} label="Copy" />}
+              {context && (
+                <button onClick={() => setContext("")} title="Clear context" style={{
+                  background: "transparent", color: T.textFaint, border: "1px solid " + T.borderFaint,
+                  fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase",
+                  padding: "5px 10px", borderRadius: 2, cursor: "pointer",
+                }}>Clear</button>
+              )}
+            </div>
             <textarea value={context} onChange={e => setContext(e.target.value)} placeholder="Drop in raw notes, dates, names, vendor mentions, what happened, who's involved. EXEC-OS will structure it." rows={8}
               style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
             <div style={{ marginTop: 12 }}>
@@ -5410,6 +5647,17 @@ const MemoryView = () => {
       )}
 
       <Panel title="Add Memory">
+        {/* Paste / Clear controls — quick clipboard access for memory entries */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+          <PasteButton onPaste={(t) => setDraft(draft ? draft + "\n\n" + t : t)} label="Paste" />
+          {draft && (
+            <button onClick={() => setDraft("")} title="Clear draft" style={{
+              background: "transparent", color: T.textFaint, border: "1px solid " + T.borderFaint,
+              fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase",
+              padding: "5px 10px", borderRadius: 2, cursor: "pointer",
+            }}>Clear</button>
+          )}
+        </div>
         <textarea value={draft} onChange={e => setDraft(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add(); }}
           placeholder="e.g. When drafting to Chris Castle, always lead with operational risk before context."
@@ -5556,6 +5804,7 @@ const TodoToday = () => {
           onKeyDown={e => { if (e.key === "Enter") add(); }}
           placeholder="Add something for today — Enter to save"
           style={{ flex: 1, background: T.bg, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "8px 12px", borderRadius: 2 }} />
+        <PasteButton onPaste={(t) => setDraft(t)} label="Paste" />
         <button onClick={add} disabled={!draft.trim()}
           style={{ background: T.brass, border: "1px solid " + T.brass, color: T.bg, fontFamily: FF.mono, fontSize: 11, padding: "0 14px", cursor: draft.trim() ? "pointer" : "not-allowed", opacity: draft.trim() ? 1 : 0.4, borderRadius: 2, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Add</button>
       </div>
@@ -5591,20 +5840,45 @@ const NotesView = () => {
   const [active, setActive] = useState(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");
+  const [draftProject, setDraftProject] = useState("");
+  const [draftActive, setDraftActive] = useState(true);
+  const [editingBody, setEditingBody] = useState(false);
+  const [editBody, setEditBody] = useState("");
   const [query, setQuery] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
   const [adding, setAdding] = useState(false);
-  const persist = (next) => { setNotes(next); LS.set("notes", next); };
+  const persist = (next) => { setNotes(next); LS.set("notes", next); window.dispatchEvent(new Event("execos:data-updated")); };
+
+  // Build distinct project list for suggestions / filter chips
+  const allProjects = useMemo(() => {
+    const set = new Set();
+    notes.forEach(n => { if (n.project && n.project.trim()) set.add(n.project.trim()); });
+    return [...set].sort();
+  }, [notes]);
 
   const add = () => {
     const t = draftTitle.trim() || "Untitled";
     const b = draftBody.trim();
     if (!b) return;
-    const note = { id: Date.now(), title: t, body: b, pinned: false, createdAt: Date.now() };
+    const note = {
+      id: Date.now(),
+      title: t,
+      body: b,
+      project: draftProject.trim() || "",
+      pinned: false,
+      active: draftActive,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
     persist([note, ...notes]);
-    setDraftTitle(""); setDraftBody(""); setAdding(false); setActive(note);
+    setDraftTitle(""); setDraftBody(""); setDraftProject(""); setDraftActive(true);
+    setAdding(false); setActive(note);
   };
   const remove = (id) => { persist(notes.filter(n => n.id !== id)); if (active && active.id === id) setActive(null); };
-  const togglePin = (id) => persist(notes.map(n => n.id === id ? { ...n, pinned: !n.pinned } : n));
+  const togglePin = (id) => persist(notes.map(n => n.id === id ? { ...n, pinned: !n.pinned, updatedAt: Date.now() } : n));
+  const toggleActive = (id) => persist(notes.map(n => n.id === id ? { ...n, active: !n.active, updatedAt: Date.now() } : n));
+  const updateProject = (id, project) => persist(notes.map(n => n.id === id ? { ...n, project, updatedAt: Date.now() } : n));
+  const updateBody = (id, body) => persist(notes.map(n => n.id === id ? { ...n, body, updatedAt: Date.now() } : n));
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -5615,9 +5889,17 @@ const NotesView = () => {
     setAdding(true);
   };
 
-  const filtered = query.trim()
-    ? notes.filter(n => (n.title + " " + n.body).toLowerCase().includes(query.toLowerCase()))
-    : notes;
+  const filtered = useMemo(() => {
+    let list = notes;
+    if (projectFilter) {
+      list = list.filter(n => (n.project || "") === projectFilter);
+    }
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter(n => (n.title + " " + n.body + " " + (n.project || "")).toLowerCase().includes(q));
+    }
+    return list;
+  }, [notes, query, projectFilter]);
 
   return (
     <div style={{ padding: 22, height: "100%", display: "flex", flexDirection: "column" }}>
@@ -5643,6 +5925,21 @@ const NotesView = () => {
           style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "10px 14px", borderRadius: 2 }} />
       </div>
 
+      {/* Project filter chips — tap to filter by project, tap again to clear */}
+      {allProjects.length > 0 && (
+        <div style={{ marginBottom: 12, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontFamily: FF.mono, fontSize: 9, letterSpacing: 1.4, color: T.textFaint, textTransform: "uppercase", marginRight: 4 }}>Projects:</span>
+          <button onClick={() => setProjectFilter("")}
+            style={{ background: projectFilter === "" ? T.brass + "22" : "transparent", border: "1px solid " + (projectFilter === "" ? T.brass : T.border), color: projectFilter === "" ? T.brass : T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1, padding: "4px 9px", borderRadius: 2, cursor: "pointer", textTransform: "uppercase" }}>All</button>
+          {allProjects.map(p => (
+            <button key={p} onClick={() => setProjectFilter(p === projectFilter ? "" : p)}
+              style={{ background: projectFilter === p ? T.accent + "22" : "transparent", border: "1px solid " + (projectFilter === p ? T.accent : T.border), color: projectFilter === p ? T.accent : T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 0.6, padding: "4px 9px", borderRadius: 2, cursor: "pointer" }}>
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div data-grid="2col" style={{ flex: 1, display: "grid", gridTemplateColumns: "300px 1fr", gap: 14, minHeight: 0 }}>
         <Panel title={"Notes — " + filtered.length}>
           {filtered.length === 0 ? (
@@ -5654,9 +5951,16 @@ const NotesView = () => {
                   style={{ padding: "10px 0", borderBottom: "1px solid " + T.border, cursor: "pointer", background: active && active.id === n.id ? T.surface : "transparent" }}>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     {n.pinned && <span style={{ color: T.brass, fontSize: 12 }}>★</span>}
+                    {!n.pinned && n.active && <span style={{ color: T.green, fontSize: 10 }}>●</span>}
                     <div style={{ fontFamily: FF.body, fontSize: 13, color: T.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{n.title}</div>
                   </div>
-                  <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, marginTop: 2 }}>{new Date(n.createdAt).toLocaleDateString()} · {n.body.length} chars</div>
+                  {n.project && (
+                    <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.accent, marginTop: 2, letterSpacing: 0.6 }}>{n.project}</div>
+                  )}
+                  <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint, marginTop: 2 }}>
+                    {n.updatedAt && n.updatedAt !== n.createdAt ? "upd " + new Date(n.updatedAt).toLocaleDateString() : new Date(n.createdAt).toLocaleDateString()}
+                    {" · "}{n.body.length} chars
+                  </div>
                 </div>
               ))}
             </div>
@@ -5676,16 +5980,82 @@ const NotesView = () => {
             <div>
               <input value={draftTitle} onChange={e => setDraftTitle(e.target.value)} placeholder="Title"
                 style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 14, padding: "10px 12px", borderRadius: 2, marginBottom: 10 }} />
+
+              {/* Project + Active row — Kera uses these to surface the right notes */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <input value={draftProject} onChange={e => setDraftProject(e.target.value)}
+                  list="exec-os-projects-datalist"
+                  placeholder="Project (e.g. Limbach BAS · Building X · MWHC Turnover)"
+                  style={{ flex: "1 1 240px", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "8px 12px", borderRadius: 2 }} />
+                <datalist id="exec-os-projects-datalist">
+                  {allProjects.map(p => <option key={p} value={p} />)}
+                </datalist>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", background: draftActive ? T.green + "18" : T.bgSunken, border: "1px solid " + (draftActive ? T.green : T.border), borderRadius: 2, cursor: "pointer", color: draftActive ? T.green : T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase" }}>
+                  <input type="checkbox" checked={draftActive} onChange={e => setDraftActive(e.target.checked)} style={{ accentColor: T.green, width: 13, height: 13 }} />
+                  Active — Kera sees this
+                </label>
+              </div>
+
+              {/* Paste / Copy / Clear for the note body */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                <PasteButton onPaste={(t) => setDraftBody(draftBody ? draftBody + "\n\n" + t : t)} label="Paste" />
+                {draftBody && <CopyButton text={draftBody} label="Copy" />}
+                {draftBody && (
+                  <button onClick={() => setDraftBody("")} title="Clear note body" style={{
+                    background: "transparent", color: T.textFaint, border: "1px solid " + T.borderFaint,
+                    fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase",
+                    padding: "5px 10px", borderRadius: 2, cursor: "pointer",
+                  }}>Clear</button>
+                )}
+              </div>
               <textarea value={draftBody} onChange={e => setDraftBody(e.target.value)} placeholder="Paste a report, an email thread, meeting notes, vendor info..."
                 rows={16}
                 style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
               <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                <Btn onClick={() => { setAdding(false); setDraftBody(""); setDraftTitle(""); }} size="sm">Cancel</Btn>
+                <Btn onClick={() => { setAdding(false); setDraftBody(""); setDraftTitle(""); setDraftProject(""); setDraftActive(true); }} size="sm">Cancel</Btn>
                 <Btn variant="primary" icon="check" onClick={add} size="sm" disabled={!draftBody.trim()}>Save</Btn>
               </div>
             </div>
           ) : active ? (
-            <div style={{ maxHeight: 520, overflowY: "auto", fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{active.body}</div>
+            <div>
+              {/* Project + Active controls for the OPENED note */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap", paddingBottom: 12, borderBottom: "1px solid " + T.borderFaint }}>
+                <input value={active.project || ""} onChange={e => { updateProject(active.id, e.target.value); setActive({ ...active, project: e.target.value }); }}
+                  list="exec-os-projects-datalist"
+                  placeholder="Tag with a project name"
+                  style={{ flex: "1 1 220px", background: T.bgSunken, border: "1px solid " + T.borderFaint, color: T.text, fontFamily: FF.body, fontSize: 12.5, padding: "6px 10px", borderRadius: 2 }} />
+                <button onClick={() => { toggleActive(active.id); setActive({ ...active, active: !active.active }); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", background: active.active ? T.green + "18" : T.bgSunken, border: "1px solid " + (active.active ? T.green : T.border), borderRadius: 2, cursor: "pointer", color: active.active ? T.green : T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase" }}>
+                  {active.active ? "✓ Active" : "Inactive"}
+                </button>
+                <button onClick={() => { setEditBody(active.body); setEditingBody(true); }}
+                  style={{ padding: "6px 10px", background: T.bgSunken, border: "1px solid " + T.border, borderRadius: 2, cursor: "pointer", color: T.textDim, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase" }}>
+                  Edit
+                </button>
+                {active.updatedAt && active.updatedAt !== active.createdAt && (
+                  <span style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 0.6 }}>
+                    Updated {new Date(active.updatedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              {editingBody ? (
+                <div>
+                  <textarea value={editBody} onChange={e => setEditBody(e.target.value)}
+                    rows={20}
+                    style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13.5, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.65 }} />
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <Btn size="sm" onClick={() => { setEditingBody(false); setEditBody(""); }}>Cancel</Btn>
+                    <Btn size="sm" variant="primary" icon="check" onClick={() => {
+                      updateBody(active.id, editBody);
+                      setActive({ ...active, body: editBody, updatedAt: Date.now() });
+                      setEditingBody(false); setEditBody("");
+                    }}>Save</Btn>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ maxHeight: 460, overflowY: "auto", fontFamily: FF.body, fontSize: 13.5, color: T.text, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{active.body}</div>
+              )}
+            </div>
           ) : (
             <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: "60px 0", textAlign: "center", letterSpacing: 1 }}>SELECT A NOTE OR CREATE ONE</div>
           )}
@@ -6755,6 +7125,24 @@ ${d.transcript.slice(0, 16000)}` },
 };
 
 // ---------- SITES MODEL ----------
+const HOSPITAL_DIRECTORY = {"_meta":{"source":"Crothall_MedStar_Account_Contact_List.xlsx","loadedAt":"2026-05-25"},"accountTeam":[{"position":"Sr VP Operations, Crothall","name":"Chris Spanos","cell":"603-493-1427","crothall":"chris.spanos@crothall.com"},{"position":"VP Operations","name":"Nick Queensland","cell":"507-273-6348","medstar":"nick.queensland@medstar.net","crothall":"nick.queensland@crothall.com"},{"position":"Interim Regional Director of Operations","name":"Eric Letourneau","cell":"410-456-0018","medstar":"eric.letourneau@crothall.com"},{"position":"Compliance Manager","name":"Ken Blackwell","cell":"301-821-0344","medstar":"ken.blackwell@medstar.net","crothall":"ken.blackwell@crothall.com"},{"position":"Financial Controller","name":"Jeffrey Wagoner","cell":"202-734-9833","medstar":"jeffrey.o.wagoner@medstar.net","crothall":"jeffrey.wagoner@crothall.com"},{"position":"Energy Manager","name":"Michael Soforenko","cell":"443-845-0615","medstar":"michael.soforenko@medstar.net","crothall":"michael.soforenko@crothall.com"},{"position":"Interim System Maintenance Director","name":"Antoine Riley","cell":"484-475-5596","medstar":"antoine.riley@medstar.net","crothall":"antoine.riley@crothall.com"},{"position":"Interim Director of Infrastructure","name":"Heather West","cell":"804-464-7328","medstar":"heather.west@medstar.net","crothall":"heather.west@crothall.com"},{"position":"Construction Project Manager","name":"Scott Perry","cell":"443-987-1720","crothall":"scott.perry@crothall.com"},{"position":"Construction Project Manager","name":"Tom Rideout","cell":"443-786-7381","medstar":"tom.rideout@medstar.net","crothall":"tom.rideout@crothall.com"},{"position":"Construction Project Manager","name":"Josh Swafford","cell":"240-446-9372","medstar":"joshua.swafford@medstar.net","crothall":"joshua.swafford@crothall.com"},{"position":"BAS Manager","name":"VACANT"},{"position":"System Program Manager","name":"Heather West","cell":"804-464-7328","medstar":"heather.west@medstar.net","crothall":"heather.west@crothall.com"},{"position":"Technology Manager","name":"Camryn Honesty","cell":"301-332-7804","medstar":"camryn.honesty@medstar.net","crothall":"camryn.honesty@crothall.com"},{"position":"Data Analyst","name":"Joyce Herboldsheimer","cell":"443-279-8814","medstar":"joyce.herboldsheimer@medstar.net","crothall":"joyce.herboldsheimer@crothall.com"}],"regionalCarpentry":[{"position":"Director of Construction & Facilities Services","name":"Felix Peguero","cell":"301-385-6487","crothall":"felix.peguero@crothall.com"},{"position":"Facility Coordinator","name":"Mia Williams","cell":"443-433-9416","crothall":"mia.williams@crothall.com"},{"position":"Shift Superintendent","name":"David Simms","cell":"202-424-9525","crothall":"david.simms@crothall.com"},{"position":"Shift Superintendent","name":"Bobby Bennet","cell":"443-465-7729","crothall":"bobby.bennett@crothall.com"}],"sites":{"MFSHC":[{"position":"Facilities Director","name":"Ryan Stoots","office":"443-777-6142","cell":"443-653-2018","medstar":"ryan.stoots@medstar.net","crothall":"ryan.stoots@crothall.com"},{"position":"Facilities Manager (AD)","name":"Kevin Beachy","office":"443-777-8147","cell":"410-662-2219","medstar":"kevin.beachy@medstar.net","crothall":"kevin.beachy@crothall.com"},{"position":"Facilities Manager (AD)","name":"Eric Sparzak","office":"443-777-7508","cell":"410-299-7374","medstar":"eric.sparzak@medstar.net","crothall":"Eric.Sparzak@Crothall.com"},{"position":"Coordinator","name":"Jennifer Shylanski","office":"443-777-7814","medstar":"jennifer.c.shylanski@medstar.net"}],"MGSH":[{"position":"Facilities Director","name":"James Yap","office":"443-444-3961","cell":"443-703-8972","medstar":"james.s.yap@medstar.net","crothall":"james.yap@crothall.com"},{"position":"Facilities Manager (AD)","name":"Mickey Reese","office":"443-444-3968","cell":"410-913-1198","medstar":"mickey.reese@medstar.net","crothall":"mickey.reese@crothall.com"},{"position":"Facilities Manager (AD)","name":"Richard Ernest","office":"443-444-3962","cell":"202-699-2104","medstar":"richard.e.ernest@medstar.net","crothall":"richard.ernest@crothall.com"},{"position":"Facilities Coordinator","name":"Rainier Horn","office":"443-444-3040","medstar":"rainier.horn@medstar.net","crothall":"rainier.horn@crothall.com"},{"position":"Coordinator","name":"Heather Hurd","office":"443-444-3960","medstar":"heather.hurd@medstar.net"}],"MGUH":[{"position":"Facilities Director","name":"Ryan Boughner","office":"202-444-0517","cell":"240-274-0808","medstar":"ryan.boughner@medstar.net","crothall":"ryan.boughner@crothall.com"},{"position":"Senior Assistant Director","name":"Harris Fleming","cell":"301-310-9621","crothall":"harris.fleming@crothall.com"},{"position":"Facilities Manager (AD)","name":"Benny Blocker","office":"202-444-2982","cell":"202-794-3879","medstar":"benny.blocker@medstar.net","crothall":"benny.blocker@crothall.com"},{"position":"Assistant Director","name":"Sarah Kang","cell":"804-833-5800","medstar":"sarah.kang@medstar.net","crothall":"sarah.kang@crothall.com"},{"position":"Facilities Manager - Projects","name":"Jeff Taylor","office":"202-444-2983","cell":"410-572-7832","medstar":"jeff.taylor@medstar.net","crothall":"jeff.taylor@crothall.com"},{"position":"HVAC Controls Manager","name":"Juan Zuniga","cell":"804-835-4907","medstar":"juan.zuniga@medstar.net","crothall":"juan.zuniga@crothall.com"},{"position":"Program Manager","name":"Kassandra Smith","cell":"703-346-6803","medstar":"kassandra.smith@medstar.net","crothall":"kassandra.smith@crothall.com"},{"position":"Facilities Coordinator","name":"Adrianna Hardaway","cell":"540-212-1635","medstar":"adrianna.hardaway@medstar.net","crothall":"adrianna.hardaway@crothall.com"}],"MHH":[{"position":"Facilities Director","name":"Bob Decker","office":"410-350-2282","cell":"443-699-3142","medstar":"bob.e.decker@medstar.net","crothall":"robert.decker@crothall.com"},{"position":"Facilities Manager (AD)","name":"James Batchelor","office":"410-350-3595","cell":"443-703-8503","medstar":"james.batchelor@medstar.net","crothall":"James.Batchelor@crothall.com"},{"position":"Facilities Manager (AD)","name":"Dennis Sheets","office":"410-350-7205","cell":"443-962-3589","medstar":"dennis.e.sheets@medstar.net","crothall":"dennis.sheets@crothall.com"},{"position":"Compliance Administrator","name":"Joanna Johnson","office":"410-350-2177","medstar":"joanna.johnson@medstar.net","crothall":"joanna.johnson@crothall.com"},{"position":"Coordinator","name":"Margaret Redgraves","office":"410-350-3230","cell":"443-928-5370","medstar":"margaret.redgraves@medstar.net"}],"MMMC":[{"position":"Facilities Director","name":"Bob Dickey","office":"301-774-8982","cell":"202-731-0975","medstar":"robert.b.dickey@medstar.net","crothall":"bob.dickey@crothall.com"},{"position":"Facilities Manager (AD)","name":"VACANT","office":"301-774-8929"},{"position":"Facilities Manager (AD)","name":"Yawo Doh","office":"301-774-8945","cell":"301-658-4125"},{"position":"Coordinator","name":"Jessica Frank","office":"301-774-8944","medstar":"jessica.l.frank@medstar.net"}],"MNRH":[{"position":"Facilities Director","name":"George Saoutis","office":"202-877-1050","cell":"202-345-4531","medstar":"george.saoutis@medstar.net","crothall":"george.saoutis@crothall.com"},{"position":"Facility Supervisor (Mechanic)","name":"Bobby Pearson","office":"202-877-1057","cell":"301-440-1437","medstar":"robert.r.pearson@medstar.net","crothall":"bobby.pearson@crothall.com"},{"position":"Coordinator","name":"Janelle Elder","office":"202-877-1059","cell":"301-423-0637","medstar":"janelle.elder@medstar.net"}],"MSMH":[{"position":"Facilities Director","name":"Ramon Solomon","office":"301-475-6013"},{"position":"Facilities Manager (AD)","name":"Pat Wilkinson","office":"240-434-7011","cell":"301-904-6767","medstar":"patrick.wilkinson@medstar.net","crothall":"pat.wilkinson@crothall.com"}],"MSMHC":[{"position":"Facilities Director","name":"Brandon Myers","office":"301-877-7276","cell":"240-346-4038","medstar":"brandon.myers@medstar.net","crothall":"Brandon.myers@crothall.com"},{"position":"Facilities Manager (AD)","name":"Michelle Faunce","office":"301-877-4551","cell":"240-585-3330","medstar":"michelle.faunce@medstar.net","crothall":"michelle.faunce@crothall.com"},{"position":"Chief Engineer","name":"Gonza Kirksey","cell":"240-521-3799","medstar":"gonza.kirksey@medstar.net","crothall":"gonza.kirksey@crothall.com"},{"position":"Coordinator","name":"Sarah Rivera","office":"301-877-4550","cell":"410-261-9420","medstar":"sarah.rivera@medstar.net","crothall":"sarah.rivera@crothall.com"}],"MUMH":[{"position":"Facilities Director","name":"Sam Mirmirani","office":"410-554-2512","cell":"703-431-4115","medstar":"sam.mirmirani@medstar.net","crothall":"amirhadi.mirmirani@Crothall.com"},{"position":"Facilities Manager (AD)","name":"Christopher Martin","office":"410-554-6799","cell":"443-690-1665","medstar":"christopher.f.martin@medstar.net","crothall":"chris.martin@crothall.com"},{"position":"Facilities Manager (AD)","name":"VACANT","office":"410-554-2513"},{"position":"Compliance Administrator","name":"David Poling","office":"410-554-6595","medstar":"dave.poling@medstar.net","crothall":"dave.poling@crothall.com"},{"position":"Coordinator","name":"VACANT","office":"410-554-2510"}],"MWHC":[{"position":"Facilities Director","name":"Ryan Ollie","cell":"847-421-7584","medstar":"ryan.ollie@medstar.net","crothall":"ryan.ollie@crothall.com"},{"position":"Facilities Technical Director","name":"VACANT"},{"position":"Facilities Manager - Sr AD (Electrical)","name":"Joe May","cell":"301-213-3314","medstar":"joe.may@medstar.net","crothall":"joe.may@crothall.com"},{"position":"Facility - Sr AD","name":"Curtis Reece","office":"202-866-4108","cell":"202-725-6161","medstar":"curtis.b.reece@medstar.net","crothall":"curtis.reece@crothall.com"},{"position":"Facility - Project Manager","name":"Lazza Berhe","cell":"703-991-9390","medstar":"lazza.berhe@medstar.net","crothall":"Lazza.Berhe@Crothall.com"},{"position":"Facilitities Manager - AD (Chief Engineer)","name":"VACANT","office":"202-877-6831"},{"position":"Facilities Supervisor","name":"Donnie Ellis","office":"202-877-6785","cell":"240-353-3664","medstar":"donnie.r.ellis@medstar.net","crothall":"donnie.ellis@crothall.com"},{"position":"Facilities Manager - AD (General Maintenance)","name":"James Gaston","office":"202 877-2587","cell":"720-251-0694","medstar":"james.gaston2@medstar.net"},{"position":"Facilities Manager - AD (HVAC)","name":"Bernard Jordan","office":"202-877-2209","cell":"202-841-8089","medstar":"bernard.jordan@medstar.net","crothall":"bernard.jordan@crothall.com"},{"position":"Facilities Coordinator","name":"Danyelle Cooper","office":"202-877-6447","cell":"202-607-4008","medstar":"danyelle.cooper@medstar.net","crothall":"danyelle.cooper@crothall.com"},{"position":"Contact","name":"Indicates MSH employee"}]}};
+
+// Lookup contacts for a given site code. Returns empty array if site has no entries.
+function getSiteContacts(code) {
+  if (!code || !HOSPITAL_DIRECTORY.sites) return [];
+  return HOSPITAL_DIRECTORY.sites[code] || [];
+}
+
+// Returns [directors, assistantDirectors, others] for a site
+function splitSiteContacts(code) {
+  const contacts = getSiteContacts(code);
+  const directors = contacts.filter(c => /Facilities Director$|^Director\b/i.test(c.position || ""));
+  const ads = contacts.filter(c => /Assistant Director|\(AD\)|Senior Assistant Director|Sr AD|- AD\b/i.test(c.position || ""));
+  const seen = new Set([...directors.map(c => c.name), ...ads.map(c => c.name)]);
+  const others = contacts.filter(c => !seen.has(c.name));
+  return [directors, ads, others];
+}
+
 const SITE_CODES = ["MWHC", "MGUH", "MMMC", "MUMH", "MHH", "MGSH", "MSMHC", "MSMH", "MNRH", "MFSHC"];
 const SITE_NAMES = {
   MWHC: "MedStar Washington Hospital Center",
@@ -7352,6 +7740,86 @@ const SiteDetail = ({ site, onBack, update, showCreds, setShowCreds }) => {
         </div>
       </Panel>
 
+      {(() => {
+        const [directors, ads, others] = splitSiteContacts(site.code);
+        const total = directors.length + ads.length + others.length;
+        if (total === 0) return null;
+        const ContactCard = ({ c, accent }) => {
+          const isVacant = (c.name || "").toUpperCase() === "VACANT";
+          return (
+            <div style={{
+              background: T.bgSunken, border: "1px solid " + (accent || T.border),
+              borderRadius: 3, padding: 12, display: "flex", flexDirection: "column", gap: 4,
+              opacity: isVacant ? 0.55 : 1,
+            }}>
+              <div style={{ fontFamily: FF.mono, fontSize: 9, letterSpacing: 1.2, color: accent || T.brass, textTransform: "uppercase" }}>{c.position}</div>
+              <div style={{ fontFamily: FF.display, fontSize: 15, fontWeight: 500, color: T.text }}>{c.name}</div>
+              {isVacant ? (
+                <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 0.8 }}>position open</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+                  {c.office && (
+                    <a href={"tel:" + c.office.replace(/[^\d+]/g, "")}
+                      style={{ fontFamily: FF.mono, fontSize: 11, color: T.cyan, textDecoration: "none", letterSpacing: 0.4 }}>
+                      ☎ {c.office} <span style={{ color: T.textFaint, fontSize: 9, marginLeft: 4 }}>OFFICE</span>
+                    </a>
+                  )}
+                  {c.cell && (
+                    <a href={"tel:" + c.cell.replace(/[^\d+]/g, "")}
+                      style={{ fontFamily: FF.mono, fontSize: 11, color: T.cyan, textDecoration: "none", letterSpacing: 0.4 }}>
+                      ☎ {c.cell} <span style={{ color: T.textFaint, fontSize: 9, marginLeft: 4 }}>CELL</span>
+                    </a>
+                  )}
+                  {c.medstar && (
+                    <a href={"mailto:" + c.medstar}
+                      style={{ fontFamily: FF.mono, fontSize: 11, color: T.brass, textDecoration: "none", wordBreak: "break-all" }}>
+                      ✉ {c.medstar}
+                    </a>
+                  )}
+                  {c.crothall && (
+                    <a href={"mailto:" + c.crothall}
+                      style={{ fontFamily: FF.mono, fontSize: 11, color: T.brass, textDecoration: "none", wordBreak: "break-all" }}>
+                      ✉ {c.crothall}
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        };
+        return (
+          <Panel title={"Directory — " + total + " on site"} subtitle="Director, Assistant Directors, Coordinators">
+            {directors.length > 0 && (
+              <>
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.brass, letterSpacing: 1.4, marginBottom: 8 }}>DIRECTOR</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10, marginBottom: 16 }}>
+                  {directors.map((c, i) => <ContactCard key={"d" + i} c={c} accent={T.brass} />)}
+                </div>
+              </>
+            )}
+            {ads.length > 0 && (
+              <>
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.cyan, letterSpacing: 1.4, marginBottom: 8 }}>ASSISTANT DIRECTORS</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10, marginBottom: 16 }}>
+                  {ads.map((c, i) => <ContactCard key={"a" + i} c={c} accent={T.cyan} />)}
+                </div>
+              </>
+            )}
+            {others.length > 0 && (
+              <>
+                <div style={{ fontFamily: FF.mono, fontSize: 9, color: T.textDim, letterSpacing: 1.4, marginBottom: 8 }}>OTHER STAFF</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
+                  {others.map((c, i) => <ContactCard key={"o" + i} c={c} accent={T.border} />)}
+                </div>
+              </>
+            )}
+            <div style={{ marginTop: 14, fontFamily: FF.mono, fontSize: 9, color: T.textFaint, letterSpacing: 1 }}>
+              SOURCE: CROTHALL/MEDSTAR ACCOUNT CONTACT LIST · TAP PHONE TO CALL · TAP EMAIL TO COMPOSE
+            </div>
+          </Panel>
+        );
+      })()}
+
       <SiteSection title="Equipment Counts">
         {[
           ["Boilers", "boilers"], ["Chillers", "chillers"], ["Cooling Towers", "coolingTowers"],
@@ -7677,7 +8145,7 @@ const HelpView = () => {
       id: "reports",
       title: "Reports — Drafted in Your Voice",
       icon: "file",
-      tags: "reports outage incident rca pm compliance vendor weekly",
+      tags: "reports outage incident rca pm compliance vendor weekly paste export download",
       body: (
         <div>
           <p>Six template types calibrated to your operational reality:</p>
@@ -7689,7 +8157,15 @@ const HelpView = () => {
             <li><b>Vendor Performance:</b> for review meetings or SLA escalations.</li>
             <li><b>Weekly Recap:</b> for Heather or Chris. Brief, executive-tone, no bullets unless data demands it.</li>
           </ul>
-          <p style={{ marginTop: 12 }}>Each saved report goes into your Audit Log. Iterate in Terminal: "Make it shorter. Remove paragraph 3. Lead with financial impact."</p>
+          <p style={{ marginTop: 12 }}><b>Workflow:</b> pick a template → drop raw notes/dates/names into the Context field (use the <b>Paste</b> button to drop your clipboard in) → hit Generate. Kera structures it in your voice. Output sits in the right panel.</p>
+          <p style={{ marginTop: 12 }}><b>Four export actions</b> on every generated report:</p>
+          <ul>
+            <li><b>COPY (BRANDED)</b> — copies with MEDSTAR HEALTH / CROTHALL HEALTHCARE letterhead and your full signature block (484-475-5596). Ready to paste into Outlook for external send.</li>
+            <li><b>COPY (RAW)</b> — copies just the body text, no letterhead. Use when you need to embed in something else.</li>
+            <li><b>DOWNLOAD</b> — saves as a .txt file with the branded letterhead.</li>
+            <li><b>SAVE</b> — stores it in the Saved Reports panel for future reference.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}>Each generation logs to your Audit Log. Iterate by going to Terminal: "Make it shorter. Remove paragraph 3. Lead with financial impact."</p>
         </div>
       ),
     },
@@ -7716,14 +8192,40 @@ const HelpView = () => {
     },
     {
       id: "notes",
-      title: "Notes — Pinned Reference Docs",
+      title: "Notes — Working Knowledge Kera Reads",
       icon: "file",
-      tags: "notes documents pin context reference",
+      tags: "notes documents pin context reference project active tag knowledge edit todo today",
       body: (
         <div>
-          <p>Long-form reference material. Things like your turnover checklist, your PM compliance framework, vendor proposals, project scopes.</p>
-          <p style={{ marginTop: 12 }}><b>The ★ pin is powerful:</b> pinned notes get included in every Kera conversation as active context. Pin 3-5 most-referenced docs and Kera has them loaded by default.</p>
-          <p style={{ marginTop: 12 }}><b>Upload:</b> click Upload to drop .txt or .md files. <b>Search:</b> search bar searches both title and body.</p>
+          <p>Long-form reference material AND your live project log. Where you write what's happening on the BAS project, what Heather asked for, what Limbach committed to, what's blocking the MWHC turnover. Kera reads all of this and uses it to draft updates, answer questions, and make recommendations.</p>
+
+          <p style={{ marginTop: 14, color: T.brass, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4 }}>THREE-TIER VISIBILITY</p>
+          <p style={{ marginTop: 6 }}>Kera sees your notes in three tiers depending on how you tag them:</p>
+          <ul>
+            <li><b style={{ color: T.brass }}>★ Pinned</b> — always in full context. For evergreen reference: vendor contacts, system specs, standing instructions. Click the ☆ PIN button on any note to pin it.</li>
+            <li><b style={{ color: T.green }}>● Active</b> — full context, sorted newest-first. For projects you're working on right now. New notes default to Active. Toggle the green ACTIVE button on any note to switch it.</li>
+            <li><b style={{ color: T.textDim }}>☰ Index</b> — title + project + first 200 chars only. For archived work. Kera knows the note exists and can ask you for full text if it's relevant.</li>
+          </ul>
+          <p style={{ marginTop: 8, fontSize: 12, color: T.textFaint }}>Hard cap of 40,000 chars total context (~10K tokens) so this stays cost-efficient as your notes pile up. Newest active notes win when the budget is full.</p>
+
+          <p style={{ marginTop: 14, color: T.brass, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4 }}>PROJECT TAGGING</p>
+          <p style={{ marginTop: 6 }}>Tag any note with a project name (free text, autocompletes from existing projects). Examples: "Building X BAS", "MWHC Turnover", "Chemstar Evaluation". Then:</p>
+          <ul>
+            <li>Project chips appear above the notes list — tap one to filter to only that project's notes</li>
+            <li>Kera sees the project tag on every note as <code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>[project: ...]</code> so when you ask "draft a status update for Building X", she pulls only those notes</li>
+            <li>Each note shows the project tag in cyan under its title in the list</li>
+          </ul>
+
+          <p style={{ marginTop: 14, color: T.brass, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4 }}>EDIT IN PLACE</p>
+          <p style={{ marginTop: 6 }}>Open any note → click <b>Edit</b> → make changes → click Save. The note's <code style={{ fontFamily: FF.mono, fontSize: 12 }}>updatedAt</code> timestamp gets bumped so Kera knows what's freshest. The list shows "upd 5/25/2026" instead of the creation date once a note has been edited.</p>
+
+          <p style={{ marginTop: 14, color: T.brass, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4 }}>TODO TODAY</p>
+          <p style={{ marginTop: 6 }}>The TODO TODAY panel at the top of Notes is your daily action list. Items persist across days until you check them off and Clear Done. Open todos flow into Brief Me and Terminal Quick Start so Kera knows what's on your plate today.</p>
+
+          <p style={{ marginTop: 14, color: T.brass, fontFamily: FF.mono, fontSize: 11, letterSpacing: 1.4 }}>PASTE / COPY / CLEAR</p>
+          <p style={{ marginTop: 6 }}>Every note body has Paste, Copy, and Clear buttons above the text area. Paste appends to existing text so you can build a multi-section note without losing what's there.</p>
+
+          <p style={{ marginTop: 14 }}><b>Upload:</b> click Upload .TXT/.MD to drop a text file. <b>Search:</b> searches title, body, and project name across all notes. <b>Workflow tip:</b> create one Active note per project; keep adding dated entries to the body as things happen. Ask Kera "what's the latest on [project name]" and she'll synthesize from those entries.</p>
         </div>
       ),
     },
@@ -7731,12 +8233,20 @@ const HelpView = () => {
       id: "audit",
       title: "Audit Log — Every AI Call",
       icon: "list",
-      tags: "audit log history calls api timestamps",
+      tags: "audit log history calls api timestamps errors filter debug",
       body: (
         <div>
-          <p>Every Claude API call gets logged here with timestamp, source module, prompt preview, response length, milliseconds, and status. Helpful for tracking what you've asked and when, and for verifying that your API credits are being used as expected.</p>
-          <p style={{ marginTop: 12 }}>Errors show in red. Click any row to see full details.</p>
+          <p>Every Claude API call gets logged here with timestamp, source module, prompt preview, response length, milliseconds, status, model used, and token counts (input/output/cache).</p>
+          <p style={{ marginTop: 12 }}><b>Three filter tabs at the top:</b></p>
+          <ul>
+            <li><b>All</b> — every call</li>
+            <li><b style={{ color: T.red }}>Errors</b> — only failed calls (useful when the Dashboard shows the Errors count in red)</li>
+            <li><b style={{ color: T.green }}>Success</b> — only successful calls</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Click any row</b> to expand it — see the full prompt text, error detail if it failed, and exact token counts.</p>
+          <p style={{ marginTop: 12 }}><b>Shortcut:</b> on the Dashboard's System panel, the Errors row is clickable when the count is non-zero. Tapping it jumps you here with the Errors filter already applied.</p>
         </div>
+
       ),
     },
     {
@@ -7900,8 +8410,9 @@ const HelpView = () => {
             <li><b style={{ color: T.red }}>ERR</b> — Sync error. Check workspace key or Supabase status.</li>
             <li><b style={{ color: T.green }}>API</b> — Anthropic key set and ready.</li>
             <li><b style={{ color: T.red }}>NO KEY</b> — No Anthropic key — AI features will fail until you set one.</li>
-            <li><b>USE 4%</b> — Monthly token budget consumed. Hidden if no budget set. Click for breakdown (used, budget, input/output split, calls, days to reset).</li>
+            <li><b>USE 4%</b> — Monthly token budget consumed. Hidden if no budget set. Click for breakdown (used, budget, input/output split, calls, days to reset, cache savings).</li>
           </ul>
+          <p style={{ marginTop: 12, color: T.brass }}><b>Where to find the USE chip:</b> top right of the screen, in the same row as your clock and the SYNC/API status dots. On desktop it sits between API and the clock. On mobile, look between the API dot and the gear icon. It only shows when you've set a Monthly Token Budget (see below). Tap or click the chip to expand the full usage popover.</p>
           <p style={{ marginTop: 12 }}><b>Monthly Token Budget (optional):</b> set a token cap in Settings → AI / Model to enable the USE indicator in the top bar. Total tokens (input + output) are tallied per calendar month and reset on the 1st. Sonnet 4.6 costs roughly $3 per million input tokens + $15 per million output tokens, so 1M total tokens typically lands between $5–10 depending on mix. Leave the budget empty to hide the indicator. The counter survives the 200-entry audit log cap because it stores running monthly totals separately.</p>
           <p style={{ marginTop: 12, color: T.brass }}><b>Important:</b> the workspace key never leaves your device. It's used to scope your data inside Supabase, not for authentication. Treat it like a password — long, unique, written down somewhere safe.</p>
         </div>
@@ -8643,9 +9154,45 @@ const CalModal = ({ state, onSave, onDelete, onClose }) => {
 };
 
 // ---------- AUDIT VIEW ----------
-const AuditView = () => {
+const AuditView = ({ initialFilter = "all" }) => {
   const [log, setLog] = useState(() => LS.get("audit_log", []));
+  const [filter, setFilter] = useState(() => {
+    // One-shot filter passed via LS from Dashboard's Errors row click
+    const oneShot = LS.get("audit_filter_oneshot", "");
+    if (oneShot) {
+      try { localStorage.removeItem("execos:audit_filter_oneshot"); } catch {}
+      return oneShot;
+    }
+    return initialFilter;
+  });
+  const [expanded, setExpanded] = useState(new Set());
   const clear = () => { LS.set("audit_log", []); setLog([]); };
+
+  const filtered = useMemo(() => {
+    if (filter === "errors") return log.filter(e => e.status === "error");
+    if (filter === "ok") return log.filter(e => e.status === "ok");
+    return log;
+  }, [log, filter]);
+
+  const errorCount = log.filter(e => e.status === "error").length;
+  const okCount = log.filter(e => e.status === "ok").length;
+
+  const toggleExpand = (i) => {
+    const next = new Set(expanded);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    setExpanded(next);
+  };
+
+  const tabBtn = (id, label, count, color) => (
+    <button onClick={() => setFilter(id)} style={{
+      padding: "6px 12px", background: filter === id ? (color || T.brass) + "22" : "transparent",
+      border: "1px solid " + (filter === id ? (color || T.brass) : T.border),
+      color: filter === id ? (color || T.brass) : T.textDim,
+      fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase",
+      cursor: "pointer", borderRadius: 2,
+    }}>{label} {count}</button>
+  );
+
   return (
     <div style={{ padding: 22 }}>
       <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
@@ -8655,25 +9202,50 @@ const AuditView = () => {
         </div>
         {log.length > 0 && <Btn variant="danger" icon="trash" onClick={clear} size="sm">Clear Log</Btn>}
       </div>
-      <Panel title={"Entries — " + log.length}>
-        {log.length === 0 ? (
-          <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: "30px 0", textAlign: "center", letterSpacing: 1 }}>NO ACTIVITY YET</div>
+
+      {/* Filter tabs */}
+      <div style={{ marginBottom: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {tabBtn("all", "All", log.length)}
+        {tabBtn("errors", "Errors", errorCount, T.red)}
+        {tabBtn("ok", "Success", okCount, T.green)}
+      </div>
+
+      <Panel title={"Entries — " + filtered.length + (filter !== "all" ? " (filtered)" : "")}>
+        {filtered.length === 0 ? (
+          <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textFaint, padding: "30px 0", textAlign: "center", letterSpacing: 1 }}>
+            {filter === "errors" ? "NO ERRORS — KERA HEALTHY" : filter === "ok" ? "NO SUCCESSFUL CALLS YET" : "NO ACTIVITY YET"}
+          </div>
         ) : (
           <div style={{ maxHeight: 600, overflowY: "auto" }}>
-            {log.map((e, i) => (
-              <div key={i} style={{ padding: "12px 0", borderBottom: i < log.length - 1 ? "1px solid " + T.border : "none" }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "center", fontFamily: FF.mono, fontSize: 10, letterSpacing: 0.6 }}>
-                  <span style={{ color: T.textFaint }}>{new Date(e.ts).toLocaleString()}</span>
-                  <span style={{ color: T.brass, textTransform: "uppercase", letterSpacing: 1.4 }}>{e.source}</span>
-                  <span style={{ color: e.status === "ok" ? T.green : T.red, textTransform: "uppercase", letterSpacing: 1.4 }}>{e.status}</span>
-                  <span style={{ color: T.textDim }}>{e.model}</span>
-                  {e.ms && <span style={{ color: T.textDim }}>{(e.ms / 1000).toFixed(1)}s</span>}
-                  {e.replyLen && <span style={{ color: T.textDim }}>{e.replyLen} chars out</span>}
+            {filtered.map((e, i) => {
+              const isErr = e.status === "error";
+              const isOpen = expanded.has(i);
+              return (
+                <div key={i} style={{ padding: "12px 0", borderBottom: i < filtered.length - 1 ? "1px solid " + T.border : "none", background: isErr ? T.red + "08" : "transparent" }}>
+                  <div onClick={() => toggleExpand(i)} style={{ cursor: "pointer", display: "flex", gap: 10, alignItems: "center", fontFamily: FF.mono, fontSize: 10, letterSpacing: 0.6 }}>
+                    <span style={{ color: T.textFaint }}>{new Date(e.ts).toLocaleString()}</span>
+                    <span style={{ color: T.brass, textTransform: "uppercase", letterSpacing: 1.4 }}>{e.source}</span>
+                    <span style={{ color: isErr ? T.red : T.green, textTransform: "uppercase", letterSpacing: 1.4 }}>{e.status}</span>
+                    <span style={{ color: T.textDim }}>{e.model}</span>
+                    {e.ms && <span style={{ color: T.textDim }}>{(e.ms / 1000).toFixed(1)}s</span>}
+                    {e.replyLen && <span style={{ color: T.textDim }}>{e.replyLen} chars out</span>}
+                    <span style={{ marginLeft: "auto", color: T.textFaint }}>{isOpen ? "▾" : "▸"}</span>
+                  </div>
+                  <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.text, marginTop: 4, lineHeight: 1.5, overflow: isOpen ? "visible" : "hidden", textOverflow: "ellipsis", whiteSpace: isOpen ? "pre-wrap" : "nowrap" }}>{e.prompt}</div>
+                  {e.error && (
+                    <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.red, marginTop: 6, padding: "8px 12px", background: T.red + "12", border: "1px solid " + T.red + "44", borderRadius: 2, lineHeight: 1.5, wordBreak: "break-word" }}>
+                      <div style={{ fontSize: 9, letterSpacing: 1.4, marginBottom: 4, opacity: 0.7 }}>ERROR DETAIL</div>
+                      {e.error}
+                    </div>
+                  )}
+                  {isOpen && e.inputTokens !== undefined && (
+                    <div style={{ marginTop: 6, fontFamily: FF.mono, fontSize: 10, color: T.textFaint, letterSpacing: 0.6 }}>
+                      Tokens: {e.inputTokens} in · {e.outputTokens} out{e.cacheRead ? " · " + e.cacheRead + " cached" : ""}{e.cacheCreate ? " · " + e.cacheCreate + " written" : ""}
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.text, marginTop: 4, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.prompt}</div>
-                {e.error && <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.red, marginTop: 3 }}>{e.error}</div>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Panel>
