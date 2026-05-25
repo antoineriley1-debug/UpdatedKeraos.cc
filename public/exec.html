@@ -8041,7 +8041,11 @@ const CalendarView = () => {
     : calView === "week"
       ? (() => { const ws = calStartOfWeek(viewDate); const we = calAddDays(ws, 6);
           return `${CAL_MONTHS[ws.getMonth()].slice(0,3)} ${ws.getDate()} — ${CAL_MONTHS[we.getMonth()].slice(0,3)} ${we.getDate()}, ${we.getFullYear()}`; })()
-      : "Agenda — Upcoming";
+      : (() => {
+          const today = calStartOfDay(new Date());
+          if (calSameDay(viewDate, today)) return "Agenda — From Today";
+          return `Agenda — From ${CAL_MONTHS[viewDate.getMonth()].slice(0,3)} ${viewDate.getDate()}, ${viewDate.getFullYear()}`;
+        })();
 
   return (
     <div style={{ padding: 22, height: "100%", display: "flex", flexDirection: "column" }}>
@@ -8105,7 +8109,7 @@ const CalendarView = () => {
       <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         {calView === "month" && <CalMonthView viewDate={viewDate} events={filtered} onDayClick={d => setModal({ mode: "new", date: d })} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
         {calView === "week"  && <CalWeekView  viewDate={viewDate} events={filtered} onDayClick={d => setModal({ mode: "new", date: d })} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
-        {calView === "agenda" && <CalAgendaView events={filtered} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
+        {calView === "agenda" && <CalAgendaView viewDate={viewDate} events={filtered} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
       </div>
 
       {/* LEGEND */}
@@ -8253,10 +8257,14 @@ const CalWeekView = ({ viewDate, events, onDayClick, onEventClick }) => {
   );
 };
 
-const CalAgendaView = ({ events, onEventClick }) => {
-  const today = calStartOfDay(new Date()).getTime();
+const CalAgendaView = ({ viewDate, events, onEventClick }) => {
+  const anchorDate = calStartOfDay(viewDate || new Date());
+  const anchorYmd = calYmd(anchorDate);
+  const today = calStartOfDay(new Date());
+  const isToday = calSameDay(anchorDate, today);
+
   const sorted = [...events]
-    .filter(e => new Date(e.date + "T00:00:00").getTime() >= today)
+    .filter(e => e.date >= anchorYmd)
     .sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.startTime || "").localeCompare(b.startTime || "");
@@ -8265,7 +8273,7 @@ const CalAgendaView = ({ events, onEventClick }) => {
   if (sorted.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: 60, color: T.textFaint, fontFamily: FF.mono, fontSize: 12, border: "1px dashed " + T.border, borderRadius: 4 }}>
-        No upcoming events. Click "New Event" to add one.
+        No events from {isToday ? "today" : CAL_MONTHS[anchorDate.getMonth()] + " " + anchorDate.getDate()} onwards. {isToday ? "Click \"New Event\" to add one." : "Click Today to return."}
       </div>
     );
   }
