@@ -277,7 +277,9 @@ const FF = {
   mono:    "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace",
 };
 
-const SYSTEM_PROMPT = `You are Kera — Antoine's personal AI Chief of Staff inside EXEC-OS. If asked your name, you are Kera. EXEC-OS is the platform; Kera is who he is talking to.
+// CORE system prompt — sent on EVERY call. Identity, voice, context, never-fabricate.
+// Kept under 1024 tokens? No — over 1024 to qualify for caching minimum.
+const SYSTEM_PROMPT_CORE = `You are Kera — Antoine's personal AI Chief of Staff inside EXEC-OS. If asked your name, you are Kera. EXEC-OS is the platform; Kera is who he is talking to.
 
 Antoine is Antoine W. Riley Sr. (also called Twiney), Director of Systems Maintenance at Crothall Healthcare, managing the full MedStar Health portfolio (10 hospitals: MWHC, MGUH, MMMC, MUMH, MHH, MGSH, MSMHC, MSMH, MNRH, MFSHC). He reports to Heather C. West. Active work includes Building X BAS controls (Limbach), summer cooling readiness, PM compliance libraries, the MWHC turnover checklist, and proprietary tools MedStarH2OLog and Load Lever.
 
@@ -287,7 +289,13 @@ OUTPUT: Operational. Antoine should be able to use what you produce without edit
 
 NEVER fabricate vendor names, dates, ticket numbers, hospital codes, or specifics you don't have. If asked about something you don't know, say so plainly.
 
-═══════════════════════════════════════════════════════════════
+You live inside EXEC-OS, an enterprise web app Antoine built for himself. It has 14 views grouped into Operations, Workflows, Knowledge, and System sections. When his question touches platform features specifically, you'll have detail context loaded — otherwise focus on the work.`;
+
+// PLATFORM KNOWLEDGE — appended ONLY when source involves the Terminal or a query
+// that might ask "what can you do". Most purpose-built views (Reports, Contracts,
+// Focus modules, Email Intel) don't need this — they're already in the right context.
+// Sent as a separate cache block so it caches independently from the core.
+const PLATFORM_KNOWLEDGE = `═══════════════════════════════════════════════════════════════
 EXEC-OS PLATFORM — WHAT YOU LIVE INSIDE
 ═══════════════════════════════════════════════════════════════
 
@@ -333,6 +341,38 @@ WHEN TO REDIRECT: If Antoine asks for something a specific view does better, poi
 YOUR ACTUAL LIMITS: You don't have realtime access to Smartsheet, his email inbox, his Outlook calendar, his Plaud cloud, or any external API. You only see what the current view passes you in context. If he asks "what's on my schedule," ask him to check the Calendar view or paste it in. If he asks "what emails do I have," you can only see what Email Intel has fetched and shown you. You CAN see his Memory and Notes content (it's passed as context). If he asks "what did we discuss about X," check his Memory and the current conversation — don't claim memory across separate sessions, you don't have that.
 
 WHAT YOU CAN ACTUALLY DO RIGHT NOW (when asked "what can you do"): help draft any report, investigate any contract, parse any image he uploads, extract intel from an email he's already pulled into Email Intel, generate the daily brief, unstick him via any of the 6 Focus OS tools, process a Plaud recording (if backend connected), file a recording to a site, talk through any technical problem in his MedStar portfolio, draft emails to Heather/Nick/Chris/vendors, write Slack messages, walk through a vendor evaluation. You are not a search engine, you are not a scheduler, you are not connected to the internet.`;
+
+// Backwards-compat: any code that references SYSTEM_PROMPT still gets the full thing.
+const SYSTEM_PROMPT = SYSTEM_PROMPT_CORE + "\n\n" + PLATFORM_KNOWLEDGE;
+
+// Sources that should run on the cheap-fast tier (Haiku 4.5).
+// These are mechanical: extract, classify, summarize, distill — no creative writing.
+const FAST_SOURCES = new Set([
+  "inbox-extract",
+  "inbox-summarize",
+  "inbox-actions",
+  "inbox-task",
+  "contract-distill",
+]);
+
+// Sources that need the full platform knowledge appended.
+// Most purpose-built views (Reports, Contracts, Focus, Email actions) don't need it —
+// they already operate in their own well-defined context.
+const PLATFORM_AWARE_SOURCES = new Set([
+  "terminal",
+  "brief",
+  "dashboard-task-explain",
+  "dashboard-task-replan",
+  "dashboard-task-email",
+]);
+
+// Pick the right model for a given source, respecting user's setting + smart routing toggle.
+function pickModel(source, userModel) {
+  const smartRouting = LS.get("smart_routing", true);
+  if (!smartRouting) return userModel || "claude-sonnet-4-6";
+  if (FAST_SOURCES.has(source)) return "claude-haiku-4-5-20251001";
+  return userModel || "claude-sonnet-4-6";
+}
 
 // =============================================================
 // EXEC_OS_DEFAULTS — Antoine's specific endpoints, baked in.
@@ -556,27 +596,54 @@ function parseCsv(text) {
 }
 
 // ---------- API CALL ----------
-async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey, model, source = "terminal", includeCredentials = false, images = null, maxTokens = 2048 }) {
+async function callClaude({ prompt, system = null, history = [], apiKey, model, source = "terminal", includeCredentials = false, images = null, maxTokens = 2048 }) {
   if (!apiKey) throw new Error("No API key set. Open Settings (gear icon) and paste your Anthropic API key.");
 
-  // Inject long-term memory
-  const memories = LS.get("memories", []);
-  let augmentedSystem = system;
-  if (memories.length) {
-    augmentedSystem += "\n\n# LONG-TERM MEMORY\nThings Twiney has explicitly asked you to remember. Use these naturally when relevant.\n" +
-      memories.map((m, i) => `${i + 1}. ${m.text}`).join("\n");
+  // Route to the right model tier based on source + smart_routing setting.
+  const finalModel = pickModel(source, model);
+
+  // Build the system prompt as an array of blocks, applying prompt caching to stable
+  // prefixes for ~90% cost reduction on repeated input. Order matters: most stable first.
+  // Cache breakpoint sits on the LAST STABLE block so dynamic per-call context (sites,
+  // tasks) doesn't invalidate the cache.
+  const stableBlocks = [];
+
+  // Block 1: CORE identity + voice + Antoine context (every call)
+  stableBlocks.push({ type: "text", text: system || SYSTEM_PROMPT_CORE });
+
+  // Block 2: PLATFORM_KNOWLEDGE (only for Terminal / Brief / Dashboard task actions)
+  if (system === null && PLATFORM_AWARE_SOURCES.has(source)) {
+    stableBlocks.push({ type: "text", text: PLATFORM_KNOWLEDGE });
   }
 
-  // Inject any notes the user explicitly pinned as "active context"
+  // Block 3: Long-term memory (stable across a session)
+  const memories = LS.get("memories", []);
+  if (memories.length) {
+    const memText = "# LONG-TERM MEMORY\nThings Twiney has explicitly asked you to remember. Use these naturally when relevant.\n" +
+      memories.map((m, i) => `${i + 1}. ${m.text}`).join("\n");
+    stableBlocks.push({ type: "text", text: memText });
+  }
+
+  // Block 4: Pinned notes (stable across a session)
   const notes = LS.get("notes", []);
   const pinnedNotes = notes.filter(n => n.pinned);
   if (pinnedNotes.length) {
-    augmentedSystem += "\n\n# PINNED REFERENCE DOCUMENTS\nThe user has pinned these as active context.\n" +
+    const noteText = "# PINNED REFERENCE DOCUMENTS\nThe user has pinned these as active context.\n" +
       pinnedNotes.map(n => `## ${n.title}\n${n.body.slice(0, 6000)}`).join("\n\n");
+    stableBlocks.push({ type: "text", text: noteText });
   }
 
-  // Inject site profiles: any site code mentioned in the prompt OR history triggers full profile.
-  // If no specific code is mentioned, inject all site summaries (without credentials) for cross-site queries.
+  // Mark the last stable block with cache_control. Anthropic caches the cumulative
+  // prefix up to that breakpoint. Subsequent identical prefixes hit the cache at 10%
+  // of input price. Cache TTL is 5 minutes (resets on every hit).
+  if (stableBlocks.length > 0) {
+    stableBlocks[stableBlocks.length - 1].cache_control = { type: "ephemeral" };
+  }
+
+  // VOLATILE blocks (change per call — NOT cached):
+  const volatileBlocks = [];
+
+  // Site profiles: any site code mentioned in the prompt OR history triggers full profile.
   const sites = LS.get("sites", []);
   if (sites.length) {
     const haystack = (prompt + " " + history.map(m => m.content).join(" ")).toUpperCase();
@@ -585,25 +652,27 @@ async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey
     if (mentioned.length) {
       const fullProfiles = sites.filter(s => mentioned.includes(s.code));
       if (fullProfiles.length) {
-        augmentedSystem += "\n\n# SITE PROFILES (referenced in this query)\n" +
-          fullProfiles.map(s => formatSiteForContext(s, includeCredentials)).join("\n\n---\n\n");
+        volatileBlocks.push({ type: "text", text:
+          "# SITE PROFILES (referenced in this query)\n" +
+          fullProfiles.map(s => formatSiteForContext(s, includeCredentials)).join("\n\n---\n\n")
+        });
       }
     } else {
-      // Light cross-site summary when no specific site is named
-      augmentedSystem += "\n\n# PORTFOLIO SITES (summary only — ask about a specific site code for full detail)\n" +
-        sites.map(s => `${s.code}: ${s.name || "[name TBD]"} — Director: ${s.director || "TBD"}`).join("\n");
+      volatileBlocks.push({ type: "text", text:
+        "# PORTFOLIO SITES (summary only — ask about a specific site code for full detail)\n" +
+        sites.map(s => `${s.code}: ${s.name || "[name TBD]"} — Director: ${s.director || "TBD"}`).join("\n")
+      });
     }
   }
 
-  // Inject live Smartsheet tasks (Priority Tasks tracker) when relevant.
-  // We always inject open tasks since they're directly operational and small.
+  // Live Smartsheet tasks (changes per call — not cached)
   const liveTasks = (typeof window !== "undefined" && window.EXEC_OS_LIVE_TASKS) || [];
   if (liveTasks.length) {
     const isDone = (s) => /complete|done|closed/i.test(s || "");
     const openTasks = liveTasks.filter(t => !isDone(t.status)).slice(0, 50);
     if (openTasks.length) {
-      augmentedSystem += "\n\n# LIVE PRIORITY TASKS (from Smartsheet, updated automatically)\n";
-      augmentedSystem += openTasks.map((t, i) => {
+      let taskText = "# LIVE PRIORITY TASKS (from Smartsheet, updated automatically)\n";
+      taskText += openTasks.map((t, i) => {
         const parts = [`${i + 1}. ${t.task || "(untitled)"}`];
         const meta = [];
         if (t.status) meta.push("status: " + t.status);
@@ -615,8 +684,12 @@ async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey
         if (t.notes) parts.push("   notes: " + t.notes.slice(0, 200));
         return parts.join("\n");
       }).join("\n");
+      volatileBlocks.push({ type: "text", text: taskText });
     }
   }
+
+  // Final system array: stable (cached) blocks first, then volatile blocks
+  const systemArray = [...stableBlocks, ...volatileBlocks];
 
   // Build the user message — if images are provided, use the multimodal content array format.
   // PDFs and images both come through here. PDFs use document-type blocks; images use image-type blocks.
@@ -650,7 +723,7 @@ async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true",
       },
-      body: JSON.stringify({ model: model || "claude-sonnet-4-6", max_tokens: maxTokens, system: augmentedSystem, messages }),
+      body: JSON.stringify({ model: finalModel, max_tokens: maxTokens, system: systemArray, messages }),
     });
     if (!res.ok) {
       const txt = await res.text();
@@ -658,10 +731,15 @@ async function callClaude({ prompt, system = SYSTEM_PROMPT, history = [], apiKey
     }
     const data = await res.json();
     const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
-    appendAudit({ source, prompt: prompt.slice(0, 300), promptLen: prompt.length, replyLen: text.length, ms: Date.now() - startedAt, model: model || "claude-sonnet-4-6", status: "ok" });
+    const inputTokens = data.usage?.input_tokens || 0;
+    const outputTokens = data.usage?.output_tokens || 0;
+    const cacheCreate = data.usage?.cache_creation_input_tokens || 0;
+    const cacheRead = data.usage?.cache_read_input_tokens || 0;
+    appendAudit({ source, prompt: prompt.slice(0, 300), promptLen: prompt.length, replyLen: text.length, ms: Date.now() - startedAt, model: finalModel, status: "ok", inputTokens, outputTokens, cacheCreate, cacheRead });
+    updateMonthlyTokens(inputTokens, outputTokens, cacheCreate, cacheRead);
     return text || "(no response)";
   } catch (e) {
-    appendAudit({ source, prompt: prompt.slice(0, 300), promptLen: prompt.length, ms: Date.now() - startedAt, model: model || "claude-sonnet-4-6", status: "error", error: e.message });
+    appendAudit({ source, prompt: prompt.slice(0, 300), promptLen: prompt.length, ms: Date.now() - startedAt, model: finalModel, status: "error", error: e.message });
     throw e;
   }
 }
@@ -670,6 +748,56 @@ function appendAudit(entry) {
   const log = LS.get("audit_log", []);
   log.unshift({ ts: Date.now(), ...entry });
   LS.set("audit_log", log.slice(0, 200));
+}
+
+// Rolling monthly token counter — survives the 200-entry audit log rotation.
+// Shape: { "2026-05": { input, output, cacheCreate, cacheRead, calls }, ... }
+// Old months are pruned after 6 months to keep LS lean.
+function updateMonthlyTokens(input, output, cacheCreate = 0, cacheRead = 0) {
+  const now = new Date();
+  const key = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+  const data = LS.get("monthly_tokens", {});
+  const m = data[key] || { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, calls: 0 };
+  m.input += input || 0;
+  m.output += output || 0;
+  m.cacheCreate += cacheCreate || 0;
+  m.cacheRead += cacheRead || 0;
+  m.calls += 1;
+  data[key] = m;
+  // Prune older than 6 months
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+  for (const k of Object.keys(data)) {
+    const [yr, mo] = k.split("-").map(Number);
+    if (new Date(yr, mo - 1, 1) < cutoff) delete data[k];
+  }
+  LS.set("monthly_tokens", data);
+  window.dispatchEvent(new Event("execos:tokens-updated"));
+}
+
+// Helper for the indicator: get this month's total + budget + cache stats.
+function getMonthlyUsage() {
+  const now = new Date();
+  const key = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+  const data = LS.get("monthly_tokens", {});
+  const m = data[key] || { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, calls: 0 };
+  const budget = parseInt(LS.get("token_budget", 0), 10) || 0;
+  // Effective "billable" input tokens for budget tracking:
+  // Cache hits cost 10% of input, cache writes cost 125% — so weight them.
+  const billableInput = m.input + (m.cacheCreate * 1.25) + (m.cacheRead * 0.1);
+  return {
+    monthKey: key,
+    input: m.input,
+    output: m.output,
+    cacheCreate: m.cacheCreate,
+    cacheRead: m.cacheRead,
+    total: Math.round(billableInput + m.output),
+    rawTotal: m.input + m.output + m.cacheCreate + m.cacheRead,
+    calls: m.calls,
+    budget,
+    percent: budget > 0 ? (billableInput + m.output) / budget * 100 : null,
+    resetDate: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+    cacheRatio: m.cacheRead > 0 ? m.cacheRead / (m.input + m.cacheCreate + m.cacheRead) : 0,
+  };
 }
 
 // ---------- PRIMITIVES ----------
@@ -825,6 +953,112 @@ const Btn = ({ children, onClick, variant = "ghost", icon, loading, disabled, si
 };
 
 // ---------- TOP BAR ----------
+// Subtle usage indicator — sits in the top bar status cluster. Reads monthly token totals
+// and budget from LS. Shows nothing if no budget is set (opt-in only). Color graduates
+// from dim to amber (>=75%) to red (>=95%). Click opens a detail popover.
+const UsageIndicator = () => {
+  const [usage, setUsage] = useState(() => getMonthlyUsage());
+  const [open, setOpen] = useState(false);
+  const popRef = useRef(null);
+  const btnRef = useRef(null);
+
+  useEffect(() => {
+    const refresh = () => setUsage(getMonthlyUsage());
+    window.addEventListener("execos:tokens-updated", refresh);
+    // Also refresh when budget is changed in Settings
+    window.addEventListener("storage", refresh);
+    // Refresh every 60s in case the month rolled over while the tab was open
+    const t = setInterval(refresh, 60000);
+    return () => {
+      window.removeEventListener("execos:tokens-updated", refresh);
+      window.removeEventListener("storage", refresh);
+      clearInterval(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOut = (e) => {
+      if (popRef.current && !popRef.current.contains(e.target) && btnRef.current && !btnRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOut);
+    return () => document.removeEventListener("mousedown", onClickOut);
+  }, [open]);
+
+  // No budget set → hide entirely. Indicator is opt-in.
+  if (!usage.budget || usage.budget <= 0) return null;
+
+  const pct = Math.round(usage.percent);
+  const over = pct > 100;
+  const color = pct >= 95 ? T.red : pct >= 75 ? T.amber : T.textDim;
+  const label = over ? "100%+" : pct + "%";
+
+  const fmtNum = (n) => n >= 1000000 ? (n / 1000000).toFixed(2) + "M" : n >= 1000 ? (n / 1000).toFixed(1) + "K" : String(n);
+  const daysToReset = Math.max(1, Math.ceil((usage.resetDate - new Date()) / 86400000));
+
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+      <button ref={btnRef} onClick={() => setOpen(o => !o)} title="Monthly token usage — click for details" style={{
+        background: "transparent", border: "none", padding: "0 2px", margin: 0,
+        cursor: "pointer", display: "flex", alignItems: "center", gap: S.sm,
+        height: 24,
+      }}>
+        <div style={{
+          width: 6, height: 6, borderRadius: 3, background: color,
+          boxShadow: pct >= 95 ? `0 0 5px ${color}aa` : "none",
+        }} />
+        <span style={{ ...TS.micro, color: T.textDim, fontFamily: FF.mono, textTransform: "uppercase" }}>USE</span>
+        <span style={{ fontFamily: FF.mono, fontSize: 10, color, fontVariantNumeric: "tabular-nums", letterSpacing: 0.4 }}>{label}</span>
+      </button>
+      {open && (
+        <div ref={popRef} style={{
+          position: "absolute", top: 32, right: 0, zIndex: 200,
+          background: T.bgRaised, border: "1px solid " + T.borderBright, borderRadius: 4,
+          padding: "14px 16px", minWidth: 240,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+          fontFamily: FF.body,
+        }}>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.brass, textTransform: "uppercase", marginBottom: 8 }}>
+            Usage — {usage.monthKey}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 14px", fontSize: 12 }}>
+            <span style={{ color: T.textDim }}>Billable</span>
+            <span style={{ fontFamily: FF.mono, color: T.text, textAlign: "right" }}>{fmtNum(usage.total)} tok</span>
+            <span style={{ color: T.textDim }}>Budget</span>
+            <span style={{ fontFamily: FF.mono, color: T.text, textAlign: "right" }}>{fmtNum(usage.budget)} tok</span>
+            <span style={{ color: T.textDim }}>Percent</span>
+            <span style={{ fontFamily: FF.mono, color, textAlign: "right" }}>{over ? pct + "% (over)" : pct + "%"}</span>
+            <span style={{ color: T.textDim }}>Input</span>
+            <span style={{ fontFamily: FF.mono, color: T.textDim, textAlign: "right" }}>{fmtNum(usage.input)}</span>
+            <span style={{ color: T.textDim }}>Output</span>
+            <span style={{ fontFamily: FF.mono, color: T.textDim, textAlign: "right" }}>{fmtNum(usage.output)}</span>
+            {usage.cacheRead > 0 && (<>
+              <span style={{ color: T.green }}>Cache hit</span>
+              <span style={{ fontFamily: FF.mono, color: T.green, textAlign: "right" }}>{fmtNum(usage.cacheRead)} (90% off)</span>
+            </>)}
+            {usage.cacheCreate > 0 && (<>
+              <span style={{ color: T.textDim }}>Cache write</span>
+              <span style={{ fontFamily: FF.mono, color: T.textDim, textAlign: "right" }}>{fmtNum(usage.cacheCreate)}</span>
+            </>)}
+            <span style={{ color: T.textDim }}>Calls</span>
+            <span style={{ fontFamily: FF.mono, color: T.text, textAlign: "right" }}>{usage.calls}</span>
+            <span style={{ color: T.textDim }}>Resets</span>
+            <span style={{ fontFamily: FF.mono, color: T.text, textAlign: "right" }}>in {daysToReset}d</span>
+          </div>
+          <div style={{ marginTop: 10, height: 4, background: T.bgSunken, borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: Math.min(100, pct) + "%", background: color, transition: "width 0.3s" }} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 11, color: T.textFaint, lineHeight: 1.5 }}>
+            Counter resets on the 1st of each month. Set or change your budget in Settings → AI / Model.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TopBar = ({ onOpenPalette, onOpenSettings, hasKey, onToggleSidebar }) => {
   const [now, setNow] = useState(new Date());
   const [syncStatus, setSyncStatus] = useState(Cloud._status);
@@ -916,6 +1150,7 @@ const TopBar = ({ onOpenPalette, onOpenSettings, hasKey, onToggleSidebar }) => {
       <div style={{ display: "flex", alignItems: "center", gap: S.lg, paddingLeft: S.md, borderLeft: "1px solid " + T.borderFaint, height: 24 }}>
         <StatusDot color={syncColor} label={syncLabel} glow={syncStatus.state === "ok" || syncStatus.state === "syncing"} />
         <StatusDot color={hasKey ? T.green : T.red} label={hasKey ? "API" : "NO KEY"} glow={hasKey} />
+        <UsageIndicator />
       </div>
 
       {/* Clock */}
@@ -4230,6 +4465,11 @@ const ReportsView = ({ apiKey, model }) => {
 const Settings = ({ open, onClose, apiKey, setApiKey, model, setModel }) => {
   const [tab, setTab] = useState("ai");
   const [draft, setDraft] = useState(apiKey || "");
+  const [budgetDraft, setBudgetDraft] = useState(() => {
+    const v = LS.get("token_budget", 0);
+    return v ? String(v) : "";
+  });
+  const [smartRouting, setSmartRouting] = useState(() => LS.get("smart_routing", true));
   // Built-in defaults — auto-populate on any new device so Antoine doesn't have
   // to re-paste these three things every time. The workspace key (his password)
   // is the only secret he ever needs to type. URL and publishable key are
@@ -4323,6 +4563,34 @@ const Settings = ({ open, onClose, apiKey, setApiKey, model, setModel }) => {
                   </button>
                 ))}
               </div>
+              <div style={{ marginTop: 20, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 8 }}>Smart Model Routing</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: T.bgSunken, border: "1px solid " + T.border, borderRadius: 2 }}>
+                <input type="checkbox" checked={smartRouting} onChange={e => {
+                  setSmartRouting(e.target.checked);
+                  LS.set("smart_routing", e.target.checked);
+                }} style={{ accentColor: T.brass, width: 14, height: 14 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: FF.body, fontSize: 12.5, color: T.text }}>Route extractions and summaries to Haiku 4.5</div>
+                  <div style={{ fontFamily: FF.body, fontSize: 11, color: T.textFaint, marginTop: 2, lineHeight: 1.45 }}>
+                    Auto-uses Haiku (3× cheaper) for mechanical tasks: email extracts, summaries, action items, contract distills. Conversation, reports, and contract investigations stay on your chosen model.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 20, fontFamily: FF.mono, fontSize: 10, letterSpacing: 1.4, color: T.textDim, textTransform: "uppercase", marginBottom: 8 }}>Monthly Token Budget (optional)</div>
+              <input type="number" value={budgetDraft} onChange={e => {
+                const v = e.target.value;
+                if (v === "" || /^\d+$/.test(v)) {
+                  setBudgetDraft(v);
+                  LS.set("token_budget", v === "" ? 0 : parseInt(v, 10));
+                  window.dispatchEvent(new Event("execos:tokens-updated"));
+                }
+              }} placeholder="e.g. 1000000 (leave empty to hide indicator)"
+                style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: "10px 12px", borderRadius: 2 }} />
+              <div style={{ fontFamily: FF.body, fontSize: 11, color: T.textFaint, marginTop: 8, lineHeight: 1.5 }}>
+                Total tokens (input + output) per calendar month. Shows a subtle USE % indicator in the top bar. Sonnet 4.6 costs roughly $3/M input + $15/M output. 1M tokens ≈ $5–10 typical mix. Empty hides the indicator.
+              </div>
+
               <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <Btn variant="danger" icon="trash" onClick={() => {
                   if (confirm("Clear ALL local data (key, history, saved reports, cloud config)? This does NOT delete cloud data.")) {
@@ -7253,7 +7521,9 @@ const HelpView = () => {
             <li><b style={{ color: T.red }}>ERR</b> — Sync error. Check workspace key or Supabase status.</li>
             <li><b style={{ color: T.green }}>API</b> — Anthropic key set and ready.</li>
             <li><b style={{ color: T.red }}>NO KEY</b> — No Anthropic key — AI features will fail until you set one.</li>
+            <li><b>USE 4%</b> — Monthly token budget consumed. Hidden if no budget set. Click for breakdown (used, budget, input/output split, calls, days to reset).</li>
           </ul>
+          <p style={{ marginTop: 12 }}><b>Monthly Token Budget (optional):</b> set a token cap in Settings → AI / Model to enable the USE indicator in the top bar. Total tokens (input + output) are tallied per calendar month and reset on the 1st. Sonnet 4.6 costs roughly $3 per million input tokens + $15 per million output tokens, so 1M total tokens typically lands between $5–10 depending on mix. Leave the budget empty to hide the indicator. The counter survives the 200-entry audit log cap because it stores running monthly totals separately.</p>
           <p style={{ marginTop: 12, color: T.brass }}><b>Important:</b> the workspace key never leaves your device. It's used to scope your data inside Supabase, not for authentication. Treat it like a password — long, unique, written down somewhere safe.</p>
         </div>
       ),
