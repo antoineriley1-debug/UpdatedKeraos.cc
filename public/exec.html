@@ -168,7 +168,7 @@
 <body>
 <div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#c9a256;font-family:monospace;font-size:11px;letter-spacing:2px;">BOOTING EXEC-OS...</div></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 // =============================================================
 // DESIGN SYSTEM — Enterprise operations console
@@ -1550,6 +1550,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
         setSheetName(data.sheetName || "");
         setFetchedAt(Date.now());
         window.EXEC_OS_LIVE_TASKS = arr;
+        window.dispatchEvent(new Event("execos:data-updated"));
       })
       .catch(e => {
         if (cancelled) return;
@@ -2346,14 +2347,137 @@ const TerminalView = ({ apiKey, model }) => {
 
   const clear = () => { setMessages([]); LS.set("terminal_messages", []); };
 
-  const quickCmds = [
-    "Brief me on today's priorities",
-    "Draft a vendor escalation to Siemens about the SSO e-signature dispute",
-    "Summarize the MGUH AHU-6 issue for Chris Castle",
-    "Build me an executive outage report template",
-    "Compare PM completion across the 10 hospitals — what's the pattern?",
-    "Identify bottlenecks in the MWHC turnover checklist rollout",
-  ];
+  // Quick Start suggestions — dynamically built from his current data so they
+  // reflect what's actually in front of him today. Refreshes on data-change
+  // events and on a 15s interval (to catch background Smartsheet fetches and
+  // day-rollover).
+  const [dataTick, setDataTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setDataTick(t => t + 1);
+    window.addEventListener("execos:data-updated", bump);
+    window.addEventListener("storage", bump);
+    const interval = setInterval(bump, 15000);
+    return () => {
+      window.removeEventListener("execos:data-updated", bump);
+      window.removeEventListener("storage", bump);
+      clearInterval(interval);
+    };
+  }, []);
+
+  const quickCmds = useMemo(() => {
+    const now = new Date();
+    const todayYmd = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+    const hour = now.getHours();
+    const isMorning = hour < 12;
+
+    const isDone = (s) => /complete|done|closed/i.test(s || "");
+    const isMine = (t) => /antoine|riley/i.test(t.owner || "");
+
+    // --- Smartsheet: my open tasks, overdue-first then high-priority ---
+    const allTasks = (typeof window !== "undefined" && window.EXEC_OS_LIVE_TASKS) || [];
+    const myOpen = allTasks.filter(t => isMine(t) && !isDone(t.status));
+    const myOverdue = myOpen.filter(t => {
+      if (!t.dueDate) return false;
+      try { return new Date(t.dueDate) < new Date(now.toDateString()); } catch { return false; }
+    });
+    const myHighPri = myOpen.filter(t => /high|urgent|critical|p1|p2/i.test(t.priority || ""));
+    const myBlocked = myOpen.filter(t => /block|hold/i.test(t.status || ""));
+
+    // --- Calendar events for today ---
+    const todayEvents = (LS.get("calendar_events", []) || [])
+      .filter(e => e.date === todayYmd)
+      .sort((a, b) => (a.startTime || "").localeCompare(b.startTime || ""));
+
+    // Find the NEXT upcoming event today (after current time)
+    const currentTime = String(hour).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+    const nextEvent = todayEvents.find(e => (e.startTime || "00:00") >= currentTime) || todayEvents[0];
+
+    // --- Open TODO items ---
+    const todos = (LS.get("todo_today", []) || []).filter(t => !t.done);
+
+    // ===== Build suggestions =====
+    const suggestions = [];
+
+    // 1. Always lead with the daily briefing — universal anchor
+    suggestions.push({
+      label: isMorning ? "Brief me on today's priorities" : "Catch me up on where today stands",
+      prompt: isMorning
+        ? "Brief me on today's priorities. Lead with what's time-sensitive, then what's at risk, then the top 3 things I should personally do today."
+        : "Catch me up on where today stands. What got handled, what's still open, what I should close out before end of day.",
+    });
+
+    // 2. Next calendar event (if any)
+    if (nextEvent) {
+      const time = nextEvent.startTime || "all-day";
+      const site = nextEvent.site && nextEvent.site !== "—" ? ` [${nextEvent.site}]` : "";
+      suggestions.push({
+        label: `Prep me for: ${nextEvent.title}${site} at ${time}`,
+        prompt: `Help me prep for "${nextEvent.title}" at ${time} today${site ? " (site: " + nextEvent.site + ")" : ""}. What to lead with, what to ask, what to flag. Plain prose.${nextEvent.notes ? "\n\nMy notes on it: " + nextEvent.notes : ""}`,
+      });
+    }
+
+    // 3. First open TODO item (most recently added — top of list)
+    if (todos.length > 0) {
+      const t = todos[0];
+      suggestions.push({
+        label: `Help me knock out: ${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}`,
+        prompt: `Help me work through this todo item: "${t.text}". Give me the next 1-3 concrete moves to make this happen today. Be specific.`,
+      });
+    }
+
+    // 4. Overdue task (if any)
+    if (myOverdue.length > 0) {
+      const t = myOverdue[0];
+      suggestions.push({
+        label: `Plan recovery on overdue: ${(t.task || "").slice(0, 55)}${(t.task || "").length > 55 ? "…" : ""}`,
+        prompt: `One of my Smartsheet tasks is overdue: "${t.task}". Site: ${t.site || "—"}. Status: ${t.status || "—"}. Due: ${t.dueDate || "—"}. Notes: ${t.notes || "(none)"}.\n\nGive me the next 3 concrete steps to close this out, including who I need to push and what to put in writing.`,
+      });
+    }
+
+    // 5. Blocked task (if any, and we have room)
+    if (myBlocked.length > 0 && suggestions.length < 6) {
+      const t = myBlocked[0];
+      suggestions.push({
+        label: `Unblock: ${(t.task || "").slice(0, 60)}${(t.task || "").length > 60 ? "…" : ""}`,
+        prompt: `This task is blocked: "${t.task}". Site: ${t.site || "—"}. Status: ${t.status || "—"}. Notes: ${t.notes || "(none)"}.\n\nWhat's the most likely root cause of the block, and what's the most leveraged move to unblock it today? Draft an escalation message if leadership needs to be looped in.`,
+      });
+    }
+
+    // 6. High-priority open task (if room)
+    if (myHighPri.length > 0 && suggestions.length < 6) {
+      // Pick one not already surfaced as overdue/blocked
+      const surfaced = new Set([...myOverdue, ...myBlocked].map(t => t.id || t.task));
+      const t = myHighPri.find(t => !surfaced.has(t.id || t.task));
+      if (t) {
+        suggestions.push({
+          label: `Move forward: ${(t.task || "").slice(0, 60)}${(t.task || "").length > 60 ? "…" : ""}`,
+          prompt: `Help me move this high-priority task forward today: "${t.task}". Site: ${t.site || "—"}. Status: ${t.status || "—"}. Due: ${t.dueDate || "—"}.\n\nGive me the next concrete action plus who I need to engage. Brief and direct.`,
+        });
+      }
+    }
+
+    // 7. Second todo item if room
+    if (todos.length > 1 && suggestions.length < 6) {
+      const t = todos[1];
+      suggestions.push({
+        label: `Knock out: ${t.text.slice(0, 60)}${t.text.length > 60 ? "…" : ""}`,
+        prompt: `Help me handle this todo: "${t.text}". Next 1-3 concrete moves.`,
+      });
+    }
+
+    // Fallback if nothing dynamic to suggest — give general anchors
+    if (suggestions.length < 3) {
+      const fallbacks = [
+        { label: "Draft an end-of-day status update for Heather", prompt: "Draft a brief end-of-day status update for Heather West covering today's progress and any open risks. Plain prose, 4-6 sentences. Use what you know about my active workstreams." },
+        { label: "What should I be thinking about right now?", prompt: "Based on what you know about my active work, what should I be thinking about that I might be missing? Be direct, no fluff." },
+        { label: "Run a portfolio risk check across the 10 hospitals", prompt: "Run a portfolio-level risk check across the 10 MedStar hospitals. What patterns are forming, what's quietly drifting, what would I want a heads-up on?" },
+      ];
+      fallbacks.forEach(f => { if (suggestions.length < 6) suggestions.push(f); });
+    }
+
+    return suggestions;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataTick, messages.length]);
 
   return (
     <div style={{ padding: S.xxl, height: "100%", display: "flex", flexDirection: "column", gap: S.lg, maxWidth: 1400, margin: "0 auto", width: "100%" }}>
@@ -2395,7 +2519,7 @@ const TerminalView = ({ apiKey, model }) => {
             <div style={{ ...TS.label, color: T.textFaint, textTransform: "uppercase", marginBottom: S.md }}>Quick Start</div>
             <div style={{ display: "flex", flexDirection: "column", gap: S.sm }}>
               {quickCmds.map((c, i) => (
-                <button key={i} onClick={() => send(c)}
+                <button key={i} onClick={() => send(c.prompt)}
                   style={{
                     background: T.bgRaised,
                     border: "1px solid " + T.border,
@@ -2412,7 +2536,7 @@ const TerminalView = ({ apiKey, model }) => {
                   }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderBright; e.currentTarget.style.background = T.surface; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.background = T.bgRaised; }}>
-                  <Icon name="arrow" size={12} color={T.accent} />{c}
+                  <Icon name="arrow" size={12} color={T.accent} />{c.label}
                 </button>
               ))}
             </div>
@@ -5345,12 +5469,16 @@ const MemoryView = () => {
 const TodoToday = () => {
   const [items, setItems] = useState(() => LS.get("todo_today", []));
   const [draft, setDraft] = useState("");
-  const persist = (next) => { setItems(next); LS.set("todo_today", next); };
+  const persist = (next) => {
+    setItems(next);
+    LS.set("todo_today", next);
+    window.dispatchEvent(new Event("execos:data-updated"));
+  };
 
   const add = () => {
     const t = draft.trim();
     if (!t) return;
-    persist([...items, { id: Date.now() + Math.random(), text: t, done: false, createdAt: Date.now() }]);
+    persist([{ id: Date.now() + Math.random(), text: t, done: false, createdAt: Date.now() }, ...items]);
     setDraft("");
   };
   const toggle = (id) => persist(items.map(i => i.id === id ? { ...i, done: !i.done } : i));
@@ -8023,7 +8151,11 @@ const CalendarView = () => {
   const [filterSite, setFilterSite] = useState("all");
   const [search, setSearch] = useState("");
 
-  const persist = (next) => { setEvents(next); LS.set("calendar_events", next); };
+  const persist = (next) => {
+    setEvents(next);
+    LS.set("calendar_events", next);
+    window.dispatchEvent(new Event("execos:data-updated"));
+  };
 
   const filtered = events.filter(e => {
     if (filterCat !== "all" && e.category !== filterCat) return false;
