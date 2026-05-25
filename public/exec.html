@@ -33,6 +33,125 @@
   ::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
   button:focus, input:focus, textarea:focus { outline: none; }
   textarea, input { font-family: inherit; }
+
+  /* ============================================================
+     MOBILE RESPONSIVE LAYER
+     Activated when body has class "mobile-view" (set via JS useViewport hook).
+     Uses high specificity + !important to override inline styles where needed.
+     ============================================================ */
+
+  /* Touch target sizing — Apple HIG min 44px, Material 48dp */
+  body.mobile-view button { min-height: 36px; min-width: 36px; }
+  body.mobile-view button[data-nav] { min-height: 44px; }
+
+  /* Sidebar — hidden by default on mobile, slides in as overlay when open */
+  body.mobile-view #execos-sidebar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: 240px !important;
+    z-index: 200 !important;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+  }
+  body.mobile-view.sidebar-open #execos-sidebar {
+    transform: translateX(0);
+  }
+  body.mobile-view #execos-sidebar-backdrop {
+    display: block;
+  }
+  body.mobile-view.sidebar-open #execos-sidebar-backdrop {
+    opacity: 1; pointer-events: auto;
+  }
+  #execos-sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 150;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  body.mobile-view #execos-hamburger { display: inline-flex !important; }
+
+  /* Main content fills viewport on mobile */
+  body.mobile-view #execos-main { padding: 14px !important; }
+
+  /* Stack 2/3-column grids vertically on mobile via attribute selector */
+  body.mobile-view [data-grid="2col"],
+  body.mobile-view [data-grid="3col"],
+  body.mobile-view [data-grid="dash-split"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Modals — go near-fullscreen on mobile */
+  body.mobile-view [data-modal] {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    border: none !important;
+  }
+  body.mobile-view [data-modal-backdrop] {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+
+  /* Top bar — denser on mobile */
+  body.mobile-view #execos-topbar { padding: 10px 12px !important; }
+  body.mobile-view #execos-topbar [data-topbar-search] { display: none !important; }
+  body.mobile-view #execos-topbar [data-topbar-clock] { display: none !important; }
+
+  /* Typography — slight downscale on phones (keep on tablets) */
+  @media (max-width: 480px) {
+    body.mobile-view { font-size: 14px; }
+    body.mobile-view h1 { font-size: 22px !important; }
+    body.mobile-view h2 { font-size: 17px !important; }
+  }
+
+  /* Calendar — Month view becomes compact week list on phone */
+  body.mobile-view [data-cal-month-cell] {
+    min-height: 56px !important;
+    padding: 4px !important;
+  }
+  body.mobile-view [data-cal-toolbar] {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  body.mobile-view [data-cal-filters] {
+    grid-template-columns: 1fr !important;
+  }
+  body.mobile-view [data-cal-view-toggle] {
+    width: 100%;
+  }
+
+  /* Tables — horizontal scroll on overflow instead of breaking */
+  body.mobile-view table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* Dashboard task row — column collapsing */
+  body.mobile-view [data-dash-task-meta] {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+
+  /* Dashboard KPI strip — wrap to 2 columns instead of squishing 6 across */
+  body.mobile-view [data-dash-kpis] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  /* Dashboard split — stack vertically on mobile */
+  body.mobile-view [data-grid="dash-split"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Avoid horizontal scroll surprises */
+  body.mobile-view, body.mobile-view #root { overflow-x: hidden; }
+
+  /* Hide hamburger on desktop */
+  #execos-hamburger { display: none; }
 </style>
 </head>
 <body>
@@ -166,7 +285,54 @@ VOICE: Direct. Technically precise. Executive-appropriate. Plain prose over bull
 
 OUTPUT: Operational. Antoine should be able to use what you produce without editing. If you don't have enough context, say what's missing in one line and proceed with the best assumption clearly stated.
 
-NEVER fabricate vendor names, dates, ticket numbers, hospital codes, or specifics you don't have. If asked about something you don't know, say so plainly.`;
+NEVER fabricate vendor names, dates, ticket numbers, hospital codes, or specifics you don't have. If asked about something you don't know, say so plainly.
+
+═══════════════════════════════════════════════════════════════
+EXEC-OS PLATFORM — WHAT YOU LIVE INSIDE
+═══════════════════════════════════════════════════════════════
+
+When Antoine asks "what can you do" or describes a need, you know which view solves it and you say so. The EXEC-OS sidebar has 14 views grouped into 4 sections:
+
+OPERATIONS:
+• Dashboard — Executive overview. Live Smartsheet priority tasks (open/overdue/blocked/mine tabs). KPI strip: open, overdue, blocked, my tasks, closed-this-week, sites on alert. Workload by site. System health (AI calls today, errors, sites configured). Brief Me button generates a daily executive briefing.
+• Terminal — Where Antoine talks to you. Voice mode for hands-free. History retained across the conversation. Use this for back-and-forth thinking.
+• Sites — Profile cards for all 10 MedStar hospitals. Boilers, chillers, cooling towers, BAS, water treatment vendor, recent issues. Antoine can attach images of nameplates or readings for you to parse.
+• Recordings — Antoine's Plaud Note Pro voice recordings. You can transcribe, summarize, extract action items, identify which site the recording belongs to, file it. (Backend may not be live yet — if the setup screen shows, the backend stub isn't deployed.)
+• Calendar — Manual event grid with Month/Week/Agenda views. 7 categories color-coded (Meeting/Site Visit/PM/Vendor/Project/Personal/Deadline). All 10 MedStar site codes selectable. NOT synced with Outlook — it's his personal planning grid.
+
+WORKFLOWS:
+• Focus OS — Six surgical tools for execution friction:
+   - Task Paralysis Shatterer (can't start a task)
+   - Dopamine Menu (under-stimulated, need a quick win)
+   - Body Double (need presence, 30-min timed block)
+   - Context Switch (transitioning between tasks)
+   - Quest Mode (gamify a boring task)
+   - Open Loop Dump (brain full, sort into NOW/LATER/TRASH)
+• Email Intel — Inbox for emails forwarded to *@keraos.cc addresses (e.g. mwhc@keraos.cc, heather@keraos.cc, vendors@keraos.cc). You can: summarize threads, extract intel and action items, draft replies, create task drafts.
+• Contracts — Attorney-grade 15-section investigation. Antoine pastes a contract or uploads text/image/PDF; you produce: Deal Summary, Parties, Scope, Pricing, Term & Termination, Indemnification, Insurance, Warranties, IP, Confidentiality, Dispute Resolution, Assignment, Force Majeure, Top 5 Red Flags, Negotiation Targets, Vendor Questions, Signing Guidance (SIGN AS-IS / SIGN WITH MINOR EDITS / DO NOT SIGN WITHOUT REVISION / DO NOT SIGN). Saved investigations accumulate so you flag patterns across vendors.
+• Reports — 6 templates: Outage Report, Incident Report, Root Cause Analysis, PM Compliance Report, Vendor Performance, Weekly Executive Summary. Antoine pastes raw context; you draft leadership-ready prose. Output exports as MEDSTAR HEALTH | CROTHALL HEALTHCARE letterhead with his full signature block.
+
+KNOWLEDGE:
+• Memory — Where Antoine teaches you facts about his work. Notes, pasted docs, attached files. This is your long-term context. When he says "remember X," it goes here.
+• Notes — Reference snippets organized by tag (vendor contacts, code references, talking points). Static reference, not conversational.
+• Audit Log — Every AI call you've made: source view, prompt preview, response, any errors. Antoine uses this to debug what you've done.
+
+SYSTEM:
+• Theme — Visual presets (Operations Dark, Bloomberg, Solarized, Nord, Carbon, Light Tech). UI only, doesn't affect you.
+• Help — Documentation of every feature.
+
+CROSS-FEATURE WORKFLOWS Antoine commonly chains:
+- Forward an email to *@keraos.cc → it lands in Email Intel → you extract action items → he copies to Smartsheet
+- Plaud recording → you identify the site → file into that site's profile
+- Voice memo via Terminal → he asks you to save it → goes to Memory
+- Vendor contract arrives → Contracts view → save investigation → future contracts from same vendor get auto-compared
+- Dashboard Brief Me → daily situational awareness → if something flagged, jump to Reports for the writeup
+
+WHEN TO REDIRECT: If Antoine asks for something a specific view does better, point him there. "That sounds like a job for Reports — paste the context, pick Outage Report, hit Generate." Don't try to do everything from Terminal when a purpose-built view exists. But still help from wherever he is.
+
+YOUR ACTUAL LIMITS: You don't have realtime access to Smartsheet, his email inbox, his Outlook calendar, his Plaud cloud, or any external API. You only see what the current view passes you in context. If he asks "what's on my schedule," ask him to check the Calendar view or paste it in. If he asks "what emails do I have," you can only see what Email Intel has fetched and shown you. You CAN see his Memory and Notes content (it's passed as context). If he asks "what did we discuss about X," check his Memory and the current conversation — don't claim memory across separate sessions, you don't have that.
+
+WHAT YOU CAN ACTUALLY DO RIGHT NOW (when asked "what can you do"): help draft any report, investigate any contract, parse any image he uploads, extract intel from an email he's already pulled into Email Intel, generate the daily brief, unstick him via any of the 6 Focus OS tools, process a Plaud recording (if backend connected), file a recording to a site, talk through any technical problem in his MedStar portfolio, draft emails to Heather/Nick/Chris/vendors, write Slack messages, walk through a vendor evaluation. You are not a search engine, you are not a scheduler, you are not connected to the internet.`;
 
 // =============================================================
 // EXEC_OS_DEFAULTS — Antoine's specific endpoints, baked in.
@@ -176,7 +342,7 @@ NEVER fabricate vendor names, dates, ticket numbers, hospital codes, or specific
 // =============================================================
 const EXEC_OS_DEFAULTS = {
   smartsheetUrl: "https://priority-task-six.vercel.app/api/smartsheet/tasks?token=xK7mP2nQ8jR4vL9wY3sB6fH1tA5dG0cZ",
-  plaudListUrl: "https://priority-task-six.vercel.app/api/plaud/list?token=xK7mP2nQ8jR4vL9wY3sB6fH1tA5dG0cZ",
+  plaudListUrl: "",  // Backend not yet built — leave empty so Recordings shows setup screen, not a 404. Set this when /api/plaud/list is deployed.
   supabaseUrl: "https://kfkjagottniayrxayeav.supabase.co",
   supabaseAnonKey: "sb_publishable_qwbvvkfUkZk_Qa1gez6J8A_eTiwc0t6",
   emailInboxBase: "https://priority-task-six.vercel.app/api/email",  // GET /list, POST /update
@@ -212,6 +378,9 @@ const Icon = ({ name, size=14, color="currentColor" }) => {
     pause:<g><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></g>,
     mic:<g><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></g>,
     play:<polygon points="5 3 19 12 5 21 5 3"/>,
+    cal:<g><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></g>,
+    plus:<g><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></g>,
+    x:<g><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></g>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,display:"inline-block",verticalAlign:"middle"}}>{P[name] || null}</svg>;
 };
@@ -223,6 +392,23 @@ const LS = {
     try { localStorage.setItem("execos:" + k, JSON.stringify(v)); } catch (e) { console.warn(e); }
     if (Cloud.enabled && !Cloud.LOCAL_ONLY_KEYS.includes(k)) Cloud.queue(k, v);
   },
+};
+
+// ---------- VIEWPORT (mobile detection + body class) ----------
+const useViewport = () => {
+  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1024);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const isMobile = width < 768;
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (isMobile) document.body.classList.add("mobile-view");
+    else document.body.classList.remove("mobile-view");
+  }, [isMobile]);
+  return { width, isMobile };
 };
 
 // ---------- CLOUD SYNC (Supabase REST + PostgREST) ----------
@@ -639,7 +825,7 @@ const Btn = ({ children, onClick, variant = "ghost", icon, loading, disabled, si
 };
 
 // ---------- TOP BAR ----------
-const TopBar = ({ onOpenPalette, onOpenSettings, hasKey }) => {
+const TopBar = ({ onOpenPalette, onOpenSettings, hasKey, onToggleSidebar }) => {
   const [now, setNow] = useState(new Date());
   const [syncStatus, setSyncStatus] = useState(Cloud._status);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
@@ -660,7 +846,7 @@ const TopBar = ({ onOpenPalette, onOpenSettings, hasKey }) => {
   );
 
   return (
-    <div style={{
+    <div id="execos-topbar" style={{
       height: 48,
       background: T.bg,
       borderBottom: "1px solid " + T.border,
@@ -669,6 +855,20 @@ const TopBar = ({ onOpenPalette, onOpenSettings, hasKey }) => {
       padding: `0 ${S.xl}px`,
       gap: S.xl,
     }}>
+      {/* Mobile hamburger — only shows on mobile via CSS */}
+      <button id="execos-hamburger" onClick={onToggleSidebar} aria-label="Toggle menu" style={{
+        background: "transparent", border: "1px solid " + T.border,
+        color: T.text, padding: 0, cursor: "pointer", borderRadius: 3,
+        alignItems: "center", justifyContent: "center",
+        width: 36, height: 36,
+      }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
       {/* Brand */}
       <div style={{ display: "flex", alignItems: "center", gap: S.md }}>
         <div style={{
@@ -688,7 +888,7 @@ const TopBar = ({ onOpenPalette, onOpenSettings, hasKey }) => {
       <div style={{ flex: 1 }} />
 
       {/* Command palette trigger */}
-      <button onClick={onOpenPalette} style={{
+      <button data-topbar-search onClick={onOpenPalette} style={{
         background: T.bgRaised,
         border: "1px solid " + T.border,
         color: T.textDim,
@@ -719,7 +919,7 @@ const TopBar = ({ onOpenPalette, onOpenSettings, hasKey }) => {
       </div>
 
       {/* Clock */}
-      <div style={{
+      <div data-topbar-clock style={{
         fontFamily: FF.mono, fontSize: 11, color: T.text,
         paddingLeft: S.lg, borderLeft: "1px solid " + T.borderFaint,
         height: 24, display: "flex", alignItems: "center", gap: S.md,
@@ -751,6 +951,7 @@ const Sidebar = ({ active, onChange }) => {
     { id: "terminal", label: "Terminal", icon: "term" },
     { id: "sites", label: "Sites", icon: "hex" },
     { id: "recordings", label: "Recordings", icon: "mic" },
+    { id: "calendar", label: "Calendar", icon: "cal" },
     { id: "focus", label: "Focus OS", icon: "brain" },
     { id: "email", label: "Email Intel", icon: "mail" },
     { id: "contracts", label: "Contracts", icon: "key" },
@@ -763,7 +964,7 @@ const Sidebar = ({ active, onChange }) => {
   ];
   // Group by section
   const groups = [
-    { name: "Operations", ids: ["dashboard", "terminal", "sites", "recordings"] },
+    { name: "Operations", ids: ["dashboard", "terminal", "sites", "recordings", "calendar"] },
     { name: "Workflows",  ids: ["focus", "email", "contracts", "reports"] },
     { name: "Knowledge",  ids: ["memory", "notes", "audit"] },
     { name: "System",     ids: ["theme", "help"] },
@@ -771,7 +972,7 @@ const Sidebar = ({ active, onChange }) => {
   const byId = Object.fromEntries(items.map(i => [i.id, i]));
 
   return (
-    <div style={{
+    <div id="execos-sidebar" style={{
       width: 200,
       background: T.bgSunken,
       borderRight: "1px solid " + T.border,
@@ -795,7 +996,7 @@ const Sidebar = ({ active, onChange }) => {
               if (!it) return null;
               const isActive = active === id;
               return (
-                <button key={id} onClick={() => onChange(id)}
+                <button key={id} data-nav onClick={() => onChange(id)}
                   style={{
                     background: isActive ? T.surface : "transparent",
                     border: "none",
@@ -1271,7 +1472,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
       )}
 
       {/* KPI strip — 6 metrics from real data */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: S.md }}>
+      <div data-dash-kpis style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: S.md }}>
         <KPI label="Open Tasks"   value={kpis.openTasks}   sub={`of ${tasks.length} total`}    source="Smartsheet" onClick={() => setFilter("open")} />
         <KPI label="Overdue"      value={kpis.overdue}     status={kpis.overdue > 0 ? "alert" : "good"} source="Smartsheet" onClick={() => setFilter("overdue")} />
         <KPI label="Blocked"      value={kpis.blocked}     status={kpis.blocked > 0 ? "warn" : "good"} source="Smartsheet" onClick={() => setFilter("blocked")} />
@@ -1444,7 +1645,7 @@ const Dashboard = ({ onJump, apiKey, model }) => {
       </Panel>
 
       {/* Bottom row — owner load + workstreams */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: S.xl }}>
+      <div data-grid="dash-split" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: S.xl }}>
         <Panel title="Open Tasks by Owner" subtitle="Workload distribution">
           {(() => {
             const ownerLoad = {};
@@ -2745,7 +2946,7 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
       </div>
 
       {mode === "single" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div data-grid="2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Panel title="Source Email" subtitle={quickFiles.length > 0 ? `${quickFiles.length} attachment${quickFiles.length === 1 ? "" : "s"}` : null}>
             <textarea value={emailText} onChange={e => setEmailText(e.target.value)} placeholder="Paste an email thread, forwarded chain, or pasted transcription..." rows={12}
               style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.mono, fontSize: 12, padding: 14, borderRadius: 2, resize: "vertical", lineHeight: 1.6 }} />
@@ -3073,7 +3274,7 @@ ${perEmailAnalyses.map((a, i) => `### Analysis of "${a.label}" (Email ${i + 1})\
                   style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 11, cursor: "pointer", letterSpacing: 1.2 }}>CLOSE ×</button>
               }
             >
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18 }}>
+              <div data-grid="2col" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18 }}>
                 {/* Body column */}
                 <div>
                   <div style={{ marginBottom: 14 }}>
@@ -3917,6 +4118,44 @@ const ReportsView = ({ apiKey, model }) => {
     catch (e) { setOutput("Error: " + e.message); }
     finally { setLoading(false); }
   };
+  // Wrap a report body with a professional Crothall/MedStar header for external sharing.
+  // Plain-text format works in email, Word, Google Docs, and SMS without weird formatting.
+  const brandedReport = () => {
+    if (!output) return "";
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    const tmpl = templates[type];
+    const divider = "═".repeat(60);
+    const header =
+      "MEDSTAR HEALTH  |  CROTHALL HEALTHCARE\n" +
+      "Systems Maintenance — Director's Office\n" +
+      divider + "\n" +
+      tmpl.name.toUpperCase() + "\n" +
+      "Prepared by: Antoine W. Riley Sr., Director of Systems Maintenance\n" +
+      "Date: " + dateStr + "\n" +
+      divider + "\n\n";
+    const footer =
+      "\n\n" + divider + "\n" +
+      "Prepared with EXEC-OS by Antoine W. Riley Sr.\n" +
+      "Director of Systems Maintenance  |  Crothall Healthcare  |  MedStar Health Portfolio\n" +
+      "Direct: 484-475-5596\n";
+    return header + output + footer;
+  };
+  const copyBranded = () => { navigator.clipboard?.writeText(brandedReport()); };
+  const copyRaw = () => { navigator.clipboard?.writeText(output); };
+  const downloadBranded = () => {
+    const blob = new Blob([brandedReport()], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const safeName = templates[type].name.replace(/\s+/g, "_");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.download = `${safeName}_${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
   const save = () => {
     if (!output) return;
     const item = { id: Date.now(), type, name: templates[type].name, context: context.slice(0, 100), output, ts: Date.now() };
@@ -3929,7 +4168,7 @@ const ReportsView = ({ apiKey, model }) => {
         <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Executive Report Drafter</div>
         <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>From context to leadership-ready in under a minute.</h1>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14 }}>
+      <div data-grid="2col" style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Panel title="Report Type">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -3965,8 +4204,10 @@ const ReportsView = ({ apiKey, model }) => {
           )}
         </div>
         <Panel title="Draft" accent={T.brass} action={output && (
-          <div style={{ display: "flex", gap: 12 }}>
-            <button onClick={() => navigator.clipboard?.writeText(output)} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY</button>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <button onClick={copyBranded} title="Copy with MedStar/Crothall letterhead" style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY (BRANDED)</button>
+            <button onClick={copyRaw} title="Copy report body only, no header" style={{ background: "transparent", border: "none", color: T.textDim, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>COPY (RAW)</button>
+            <button onClick={downloadBranded} title="Download as branded .txt" style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>DOWNLOAD</button>
             <button onClick={save} style={{ background: "transparent", border: "none", color: T.brass, fontFamily: FF.mono, fontSize: 10, cursor: "pointer", letterSpacing: 1.2 }}>SAVE</button>
           </div>
         )}>
@@ -4755,7 +4996,7 @@ const NotesView = () => {
           style={{ width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text, fontFamily: FF.body, fontSize: 13, padding: "10px 14px", borderRadius: 2 }} />
       </div>
 
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "300px 1fr", gap: 14, minHeight: 0 }}>
+      <div data-grid="2col" style={{ flex: 1, display: "grid", gridTemplateColumns: "300px 1fr", gap: 14, minHeight: 0 }}>
         <Panel title={"Notes — " + filtered.length}>
           {filtered.length === 0 ? (
             <div style={{ fontFamily: FF.mono, fontSize: 10, color: T.textFaint, padding: "30px 0", textAlign: "center", letterSpacing: 1 }}>{query ? "NO MATCHES" : "NO NOTES YET"}</div>
@@ -4865,12 +5106,25 @@ function fmtDate(iso) {
 }
 
 const RecordingsView = ({ apiKey, model }) => {
+  // One-time migration: clear out the OLD broken auto-saved default URL so existing
+  // users stop hitting the 404. After this runs once, the saved URL is either empty
+  // (showing setup screen) or whatever the user explicitly entered.
+  useEffect(() => {
+    if (LS.get("plaud_migration_v1", false)) return;
+    const saved = LS.get("plaud_api_base", "");
+    const BROKEN = "https://priority-task-six.vercel.app/api/plaud/list?token=xK7mP2nQ8jR4vL9wY3sB6fH1tA5dG0cZ";
+    if (saved === BROKEN) {
+      LS.set("plaud_api_base", "");
+    }
+    LS.set("plaud_migration_v1", true);
+  }, []);
+
   // Same pattern as Dashboard — saved URL wins, otherwise use baked-in default.
   const savedPlaudBase = LS.get("plaud_api_base", "");
   const [apiBase, setApiBase] = useState(() => (savedPlaudBase && savedPlaudBase.trim()) ? savedPlaudBase : EXEC_OS_DEFAULTS.plaudListUrl);
   // Persist the default so cloud sync doesn't null it out across devices.
   useEffect(() => {
-    if (!savedPlaudBase || !savedPlaudBase.trim()) {
+    if ((!savedPlaudBase || !savedPlaudBase.trim()) && EXEC_OS_DEFAULTS.plaudListUrl) {
       LS.set("plaud_api_base", EXEC_OS_DEFAULTS.plaudListUrl);
     }
   }, []);
@@ -5407,7 +5661,7 @@ ${d.transcript.slice(0, 16000)}` },
         </div>
 
         {/* Edit panel: tags, manual site assignment, notes */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: S.md, marginBottom: S.xl }}>
+        <div data-grid="3col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: S.md, marginBottom: S.xl }}>
           {/* Tags */}
           <Panel title="Tags" dense>
             <div style={{ display: "flex", flexWrap: "wrap", gap: S.xs, marginBottom: S.md }}>
@@ -5622,7 +5876,7 @@ ${d.transcript.slice(0, 16000)}` },
 
                     {/* Areas + personnel */}
                     {((tourData.areas_walked && tourData.areas_walked.length > 0) || (tourData.personnel_present && tourData.personnel_present.length > 0)) && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: S.md }}>
+                      <div data-grid="2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: S.md }}>
                         {tourData.areas_walked && tourData.areas_walked.length > 0 && (
                           <div>
                             <div style={{ ...TS.micro, color: T.brass, letterSpacing: 1.4, marginBottom: 4 }}>AREAS WALKED</div>
@@ -6873,6 +7127,168 @@ const HelpView = () => {
       ),
     },
     {
+      id: "contracts",
+      title: "Contracts — Attorney-Grade Investigation",
+      icon: "key",
+      tags: "contracts contract investigation vendor legal review attorney clause indemnity risk negotiate",
+      body: (
+        <div>
+          <p>The Contracts view runs every contract, MSA, SOW, or vendor agreement Twiney needs to evaluate through a seasoned-attorney-style review in under a minute. It produces structured findings, surfaces red flags, and remembers prior investigations so the second contract from the same vendor gets compared against the first automatically.</p>
+          <p style={{ marginTop: 12 }}><b>What you can do here:</b></p>
+          <ul>
+            <li>Paste contract text directly or upload files (text, image, PDF) — Kera handles all three via Claude's vision model.</li>
+            <li>Optionally name the vendor and the document title so prior investigations from the same vendor get pulled into context.</li>
+            <li>Add a focus instruction (e.g. "pay special attention to the indemnity language and the cancellation terms") if there's a specific concern.</li>
+            <li>Run Investigation — Kera produces a 15-section attorney review: Deal Summary, Parties, Scope, Pricing, Term &amp; Termination, Indemnification, Insurance, Warranties, IP, Confidentiality, Dispute Resolution, Assignment, Force Majeure, Top 5 Red Flags, Negotiation Targets, Vendor Questions, and Signing Guidance.</li>
+            <li>Save the investigation to history. Future contracts will compare against it automatically when from the same vendor.</li>
+            <li>Add lessons learned — recurring red flags get surfaced aggressively in future investigations.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.brass }}><b>How it gets smarter:</b> every investigation Twiney saves becomes context for the next one. After the third or fourth contract with the same vendor, Kera will flag patterns: "This vendor consistently buries the auto-renewal in section 12.3 — same pattern as the 2025 agreement."</p>
+          <p style={{ marginTop: 12 }}><b>Signing guidance values:</b></p>
+          <ul>
+            <li><b>SIGN AS-IS</b> — Clean contract, no concerns.</li>
+            <li><b>SIGN WITH MINOR EDITS</b> — Small redlines recommended but won't kill the deal.</li>
+            <li><b>DO NOT SIGN WITHOUT REVISION</b> — Material issues that need to be fixed in negotiation.</li>
+            <li><b>DO NOT SIGN</b> — Walk away.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.amber }}>Kera is a tool, not your lawyer. For contracts above a material threshold (six figures, multi-year commits, anything touching PHI or major data), still run the investigation past a real attorney. Use Kera to prep your questions and identify the actual issues before paying for billable hours.</p>
+        </div>
+      ),
+    },
+    {
+      id: "calendar",
+      title: "Calendar — Project &amp; Site Planning",
+      icon: "cal",
+      tags: "calendar schedule event project meeting site visit PM vendor planning month week agenda",
+      body: (
+        <div>
+          <p>The Calendar is Twiney's project and site-planning grid. It is fully manual — no external sync. Type events in, they live in your workspace, they sync across your devices through Cloud Sync.</p>
+          <p style={{ marginTop: 12 }}><b>Three views:</b></p>
+          <ul>
+            <li><b>Month</b> — Standard Outlook-style grid. Click any day to create an event. Click any event pill to edit.</li>
+            <li><b>Week</b> — Hour-by-hour columns from 6 AM to 7 PM. Best for blocking out a busy site-visit week.</li>
+            <li><b>Agenda</b> — Chronological list of upcoming events with all details visible. Best for "what's next."</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Event fields:</b></p>
+          <ul>
+            <li><b>Title</b> — Required. Keep it short and recognizable on the small pill (e.g. "MWHC AHU-6 walkdown").</li>
+            <li><b>Date / Start / End</b> — Standard date and time pickers.</li>
+            <li><b>Category</b> — Color-codes the pill. Meeting (blue), Site Visit (green), PM (amber), Vendor (purple/cyan), Project (brass), Personal (gray), Deadline (red).</li>
+            <li><b>Site</b> — MedStar site code (MWHC, MGUH, MUMH, etc.) or "None / Office" for non-site events. Filtering by site is one click in the sidebar.</li>
+            <li><b>Location</b> — Optional. Specific spot like "Mechanical Room 4H2A" or "Heather's office".</li>
+            <li><b>Notes</b> — Anything else: attendees, action items, dial-in info.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Filtering:</b> the toolbar has filters for category and site, and a free-text search across title, notes, and location. All three combine.</p>
+          <p style={{ marginTop: 12, color: T.brass }}><b>Cloud sync:</b> calendar events sync the same way Notes and Memory do. Open EXEC-OS on your phone, your computer, or your tablet — same events everywhere as long as Cloud Sync is on with the same workspace key.</p>
+          <p style={{ marginTop: 12, color: T.amber }}><b>What it does NOT do:</b> no Outlook/Gmail/iCal sync. No invite sending. No timezone conversion. No conflict detection. It is a planning grid, not a calendar app. If those features matter, manage them in Outlook and mirror the highest-impact items here for personal planning.</p>
+        </div>
+      ),
+    },
+    {
+      id: "email-routing",
+      title: "Email Routing — How keraos.cc Addresses Work",
+      icon: "mail",
+      tags: "email routing keraos.cc cloudflare worker ingest forward custom address vendors heather nick mwhc",
+      body: (
+        <div>
+          <p>Any email sent to <b>anything@keraos.cc</b> automatically flows into your Email Intel inbox. You don't have to pre-create the address. The whole pipeline is yours alone.</p>
+          <p style={{ marginTop: 12 }}><b>How it works (the pipeline):</b></p>
+          <ol style={{ paddingLeft: 20 }}>
+            <li>Cloudflare Email Routing receives mail for <b>*@keraos.cc</b> (your domain).</li>
+            <li>A Cloudflare Worker named <b>execos-email-ingest</b> parses each message — sender, subject, body (plain + HTML), and any attachments (up to 8MB each).</li>
+            <li>The Worker POSTs structured JSON to the Vercel API endpoint <b>/api/email/ingest</b>, authenticated by a shared secret.</li>
+            <li>The Vercel route writes the email and any attachments into Supabase tables (<b>ingested_emails</b>, <b>ingested_attachments</b>).</li>
+            <li>EXEC-OS Email Intel reads from <b>/api/email/list</b> and renders the inbox.</li>
+          </ol>
+          <p style={{ marginTop: 12 }}><b>How to use custom addresses:</b></p>
+          <ul>
+            <li><code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>mwhc@keraos.cc</code> — site-specific. Forward all MWHC-related emails here. Filter the inbox by recipient to see only MWHC traffic.</li>
+            <li><code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>heather@keraos.cc</code> — person-specific. Forward Heather's emails here. Keeps her thread isolated.</li>
+            <li><code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>nick@keraos.cc</code> — same pattern. One per VIP correspondent.</li>
+            <li><code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>vendors@keraos.cc</code> — broad bucket. Forward all vendor outreach here.</li>
+            <li><code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>chemstar@keraos.cc</code>, <code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>limbach@keraos.cc</code>, <code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>nalco@keraos.cc</code> — vendor-specific. Granular if you need it.</li>
+            <li><code style={{ fontFamily: FF.mono, fontSize: 12, color: T.brass }}>urgent@keraos.cc</code> — anything you want elevated. Filter the inbox by this address to see only emergencies.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.brass }}><b>Critical workflow:</b> from your work email (Crothall Gmail), set up a forwarding rule. Forward all incoming → <code style={{ fontFamily: FF.mono, fontSize: 12 }}>ingest@keraos.cc</code>, OR forward specific senders → specific keraos.cc addresses. Both work simultaneously.</p>
+          <p style={{ marginTop: 12 }}><b>What gets captured per email:</b> from address, from name, to address (used for filtering), cc list, subject, plain-text body, HTML body, attachments (filename, mime type, base64 content), date header, message ID, raw size.</p>
+          <p style={{ marginTop: 12 }}><b>What Kera can do with ingested email:</b> in Email Intel, click any thread to run Extract Intel (entities, dates, action items), Summarize, Extract Action Items, Create Task Draft, or Draft Reply. All actions log to your Audit Log.</p>
+          <p style={{ marginTop: 12, color: T.amber }}><b>Troubleshooting:</b></p>
+          <ul>
+            <li>Email didn't appear after 60 seconds? Check Cloudflare → Email Routing → Activity Log to confirm it arrived. If yes, the issue is downstream (Worker, Vercel, or Supabase).</li>
+            <li>Got "Couldn't fetch inbox"? Workspace key isn't set, or the Vercel endpoint isn't responding. Check Settings → Cloud Sync.</li>
+            <li>Got "Webhook failed 401" in Cloudflare Worker logs? <code style={{ fontFamily: FF.mono, fontSize: 12 }}>INGEST_SECRET</code> in Vercel doesn't match <code style={{ fontFamily: FF.mono, fontSize: 12 }}>WEBHOOK_SECRET</code> in the Worker.</li>
+            <li>Got "Webhook failed 500"? One of the four Vercel env vars (SUPABASE_URL, SUPABASE_SERVICE_KEY, INGEST_SECRET, INGEST_WORKSPACE_KEY) is missing or wrong.</li>
+            <li>Worker isn't firing at all? Email Routing rule may not be set to "Send to a Worker" — re-check the routing rules tab in Cloudflare.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.red }}><b>Privacy note:</b> ingested emails sit in your private Supabase instance. Anyone with the workspace key sees them. Don't forward HIPAA-protected content to <code style={{ fontFamily: FF.mono, fontSize: 12 }}>keraos.cc</code> addresses unless you've reviewed the security posture with Crothall IT.</p>
+        </div>
+      ),
+    },
+    {
+      id: "settings",
+      title: "Settings — API Key, Cloud, Model",
+      icon: "cog",
+      tags: "settings api key cloud sync supabase model workspace anthropic configure",
+      body: (
+        <div>
+          <p>The gear icon in the top-right opens Settings. Three tabs:</p>
+          <p style={{ marginTop: 12 }}><b>AI / Model:</b></p>
+          <ul>
+            <li><b>Anthropic API Key</b> — paste your key here. Stored only in this browser, never synced to the cloud or anywhere else. Without a key, Terminal, Email Intel actions, Reports, Contracts, Site image parsing, and Recordings AI all fail with a clear error.</li>
+            <li><b>Model</b> — pick which Claude model to use. Default is Sonnet 4.6, which is the right balance of speed and capability for almost everything. Switch to Opus when running serious contract investigations or complex multi-step reasoning.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Cloud Sync:</b></p>
+          <ul>
+            <li><b>Supabase URL</b> — pre-filled with your project URL. Don't change unless you migrate to a new Supabase project.</li>
+            <li><b>Anon Key</b> — pre-filled. This is the publishable key, safe to be in client code.</li>
+            <li><b>Workspace Key</b> — <b>this is your password for cloud sync.</b> Anything you store in EXEC-OS gets keyed by this. Use the same key on every device to see the same data. Use a different key to start a clean workspace. Lose it and you lose your synced data — there is no recovery.</li>
+            <li><b>Disable Cloud Sync</b> — wipes the local Supabase config. Your data stays in localStorage but stops syncing to other devices.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Status indicators (top bar):</b></p>
+          <ul>
+            <li><b style={{ color: T.green }}>LIVE</b> — Cloud Sync working, data is safe across devices.</li>
+            <li><b style={{ color: T.cyan }}>SYNC</b> — Currently uploading a change.</li>
+            <li><b style={{ color: T.textDim }}>READY</b> — Configured but nothing to sync right now.</li>
+            <li><b style={{ color: T.textFaint }}>OFFLINE</b> — Cloud Sync turned off. Data only in this browser.</li>
+            <li><b style={{ color: T.red }}>ERR</b> — Sync error. Check workspace key or Supabase status.</li>
+            <li><b style={{ color: T.green }}>API</b> — Anthropic key set and ready.</li>
+            <li><b style={{ color: T.red }}>NO KEY</b> — No Anthropic key — AI features will fail until you set one.</li>
+          </ul>
+          <p style={{ marginTop: 12, color: T.brass }}><b>Important:</b> the workspace key never leaves your device. It's used to scope your data inside Supabase, not for authentication. Treat it like a password — long, unique, written down somewhere safe.</p>
+        </div>
+      ),
+    },
+    {
+      id: "focus-deep",
+      title: "Focus OS — The Six Tools, In Detail",
+      icon: "brain",
+      tags: "focus os execution stuck adhd productivity body double quest dopamine task paralysis open loop",
+      body: (
+        <div>
+          <p>Focus OS isn't a productivity dashboard or a habit tracker. It's six surgical tools for the specific moments when execution stalls — when you're staring at a task and can't start, when your brain is full and nothing's getting out, when you need to switch contexts and the friction is killing you.</p>
+          <p style={{ marginTop: 12 }}><b>The six tools, when to use each:</b></p>
+          <ul>
+            <li><b style={{ color: T.brass }}>Task Paralysis Shatterer</b> — You're staring at one task and cannot start. Paste the task, get sub-1-minute steps and the exact first physical action for the next 30 seconds. Used for: rebuilding the MWHC turnover checklist, drafting a hard email to Nick, anything where "just start" doesn't work.</li>
+            <li><b style={{ color: T.red }}>Dopamine Menu</b> — Under-stimulated, drifting, can't engage. Get a structured menu of 5-minute appetizers (quick wins), 20-minute entrees (real progress), 10-minute sides (low-effort momentum). Pick what matches your current energy.</li>
+            <li><b style={{ color: T.cyan }}>Body Double</b> — You need a focus partner. Kera acts as the presence. 30-minute block, broken into 5 / 15 / 30 minute checkpoints. The countdown timer runs in the panel. No motivational fluff — just structure and presence.</li>
+            <li><b style={{ color: T.amber }}>Context Switch</b> — Coming off one task, need to land in the next. 3-minute transition: close-out, reset, re-entry. Removes the friction of "wait, where was I supposed to be?"</li>
+            <li><b style={{ color: T.brass }}>Quest Mode</b> — Boring task. Gamify it through the lens of something you're actually into. Quest name, objective, 3 milestones with XP, boss fight, reward at completion. Don't worry, it stays sharp — not corny.</li>
+            <li><b style={{ color: T.green }}>Open Loop Dump</b> — Brain is full. Dump everything you're holding into the input, get it sorted into NOW / LATER / TRASH with one actionable next step. Ruthless about TRASH.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>How to use it well:</b></p>
+          <ul>
+            <li>Don't overthink the input — verbose is fine, even rambly. Kera reads what you mean, not what you wrote.</li>
+            <li>Cmd/Ctrl + Enter sends the input. Faster than reaching for the button.</li>
+            <li>Each tool keeps the last 10 of your inputs as history. Click any history item to reload the input and output.</li>
+            <li>Body Double's timer reset only triggers when you launch a new Body Double run. Useful for back-to-back blocks.</li>
+          </ul>
+          <p style={{ marginTop: 12 }}><b>Configuration:</b> there isn't any. The tools are deliberately fixed — six modes, no settings, no customization. The friction of configuring would defeat the point.</p>
+          <p style={{ marginTop: 12 }}><b>Common workflow:</b> open Dopamine Menu first thing after lunch when energy is low. Pick a 20-minute entrée. When done, run Context Switch into the next thing. When that next thing is the dreaded vendor reply email, run Task Paralysis Shatterer on it. When the brain feels full at 4pm, run Open Loop Dump before leaving.</p>
+          <p style={{ marginTop: 12, color: T.amber }}><b>Troubleshooting:</b> If the output looks generic or unhelpful, your input was too vague. The tools work in proportion to specificity — "I need to write something" gives you a generic answer; "I need to write a reply to Heather pushing back on the deadline she set for the MWHC turnover handoff, but without making it sound like I'm complaining" gives you a usable answer.</p>
+        </div>
+      ),
+    },
+    {
       id: "shortcuts",
       title: "Keyboard Shortcuts &amp; Tips",
       icon: "term",
@@ -7076,6 +7492,490 @@ const ThemeView = () => {
           Changes save automatically and sync across all your devices.
         </div>
         <Btn variant="danger" icon="trash" onClick={reset}>Reset to Default</Btn>
+      </div>
+    </div>
+  );
+};
+
+// ---------- CALENDAR VIEW ----------
+const CAL_CATEGORIES = [
+  { id: "meeting",  label: "Meeting",    colorKey: "accent" },
+  { id: "site",     label: "Site Visit", colorKey: "green" },
+  { id: "pm",       label: "PM",         colorKey: "amber" },
+  { id: "vendor",   label: "Vendor",     colorKey: "cyan" },
+  { id: "project",  label: "Project",    colorKey: "brass" },
+  { id: "personal", label: "Personal",   colorKey: "textDim" },
+  { id: "deadline", label: "Deadline",   colorKey: "red" },
+];
+const CAL_SITES = [
+  { code: "MWHC",  name: "Washington Hospital Center" },
+  { code: "MGUH",  name: "Georgetown University Hospital" },
+  { code: "MUMH",  name: "Union Memorial" },
+  { code: "MHH",   name: "Harbor" },
+  { code: "MGSH",  name: "Good Samaritan" },
+  { code: "MFSHC", name: "Franklin Square" },
+  { code: "MMMC",  name: "Montgomery Medical Center" },
+  { code: "MSMH",  name: "St. Mary's" },
+  { code: "MSMHC", name: "Southern Maryland" },
+  { code: "MNRH",  name: "National Rehab Network" },
+  { code: "—",     name: "None / Office" },
+];
+const CAL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const CAL_DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+const calYmd = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+};
+const calSameDay = (a, b) => calYmd(a) === calYmd(b);
+const calStartOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const calAddMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return x; };
+const calAddDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const calStartOfWeek = (d) => { const x = calStartOfDay(d); x.setDate(x.getDate() - x.getDay()); return x; };
+const calUid = () => Math.random().toString(36).slice(2, 11) + Date.now().toString(36).slice(-4);
+const calGetCategory = (id) => CAL_CATEGORIES.find(c => c.id === id) || CAL_CATEGORIES[0];
+const calCatColor = (cat) => T[cat.colorKey] || T.text;
+
+const CalendarView = () => {
+  const [events, setEvents] = useState(() => LS.get("calendar_events", []));
+  const [viewDate, setViewDate] = useState(calStartOfDay(new Date()));
+  const [calView, setCalView] = useState("month");
+  const [modal, setModal] = useState(null);
+  const [filterCat, setFilterCat] = useState("all");
+  const [filterSite, setFilterSite] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const persist = (next) => { setEvents(next); LS.set("calendar_events", next); };
+
+  const filtered = events.filter(e => {
+    if (filterCat !== "all" && e.category !== filterCat) return false;
+    if (filterSite !== "all" && e.site !== filterSite) return false;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      return (e.title || "").toLowerCase().includes(q)
+        || (e.notes || "").toLowerCase().includes(q)
+        || (e.location || "").toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const handleSave = (event) => {
+    if (event.id) persist(events.map(e => e.id === event.id ? event : e));
+    else persist([...events, { ...event, id: calUid() }]);
+    setModal(null);
+  };
+  const handleDelete = (id) => { persist(events.filter(e => e.id !== id)); setModal(null); };
+
+  const today = calStartOfDay(new Date());
+  const upcomingCount = filtered.filter(e => new Date(e.date + "T00:00:00").getTime() >= today.getTime()).length;
+
+  const titleStr = calView === "month"
+    ? `${CAL_MONTHS[viewDate.getMonth()]} ${viewDate.getFullYear()}`
+    : calView === "week"
+      ? (() => { const ws = calStartOfWeek(viewDate); const we = calAddDays(ws, 6);
+          return `${CAL_MONTHS[ws.getMonth()].slice(0,3)} ${ws.getDate()} — ${CAL_MONTHS[we.getMonth()].slice(0,3)} ${we.getDate()}, ${we.getFullYear()}`; })()
+      : "Agenda — Upcoming";
+
+  return (
+    <div style={{ padding: 22, height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontFamily: FF.mono, fontSize: 10, letterSpacing: 2.4, color: T.brass, textTransform: "uppercase" }}>Operations // Planning</div>
+          <h1 style={{ fontFamily: FF.display, fontSize: 28, fontWeight: 500, color: T.text, margin: "4px 0 0", fontStyle: "italic", letterSpacing: -0.5 }}>Where the next weeks go.</h1>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn icon="plus" variant="primary" onClick={() => setModal({ mode: "new", date: viewDate })}>New Event</Btn>
+        </div>
+      </div>
+
+      {/* TOOLBAR */}
+      <div data-cal-toolbar style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: 12, gap: S.lg, flexWrap: "wrap",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: S.md }}>
+          <Btn size="sm" onClick={() => setViewDate(calStartOfDay(new Date()))}>Today</Btn>
+          <div style={{ display: "flex", gap: 2 }}>
+            <Btn size="sm" onClick={() => setViewDate(calView === "month" ? calAddMonths(viewDate, -1) : calAddDays(viewDate, -7))}>‹</Btn>
+            <Btn size="sm" onClick={() => setViewDate(calView === "month" ? calAddMonths(viewDate, 1) : calAddDays(viewDate, 7))}>›</Btn>
+          </div>
+          <div style={{ ...TS.h2, color: T.text, marginLeft: S.md, fontFamily: FF.display }}>{titleStr}</div>
+        </div>
+        <div data-cal-view-toggle style={{ display: "flex", gap: 2 }}>
+          {["month", "week", "agenda"].map(v => (
+            <button key={v} onClick={() => setCalView(v)} style={{
+              padding: `${S.xs}px ${S.lg}px`, height: 26,
+              background: calView === v ? T.surface : "transparent",
+              color: calView === v ? T.text : T.textDim,
+              border: "1px solid " + (calView === v ? T.borderBright : T.border),
+              fontFamily: FF.mono, fontSize: 10, letterSpacing: 1, textTransform: "uppercase",
+              fontWeight: 600, borderRadius: 3, cursor: "pointer",
+            }}>{v}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* FILTERS */}
+      <div data-cal-filters style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: S.md, marginBottom: 12 }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search title, notes, location…"
+          style={{ background: T.bgSunken, border: "1px solid " + T.border, color: T.text,
+            fontFamily: FF.body, fontSize: 13, padding: "8px 12px", borderRadius: 3 }} />
+        <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
+          style={{ background: T.bgSunken, border: "1px solid " + T.border, color: T.text,
+            fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 3 }}>
+          <option value="all">All categories</option>
+          {CAL_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+        <select value={filterSite} onChange={e => setFilterSite(e.target.value)}
+          style={{ background: T.bgSunken, border: "1px solid " + T.border, color: T.text,
+            fontFamily: FF.mono, fontSize: 12, padding: "8px 12px", borderRadius: 3 }}>
+          <option value="all">All sites</option>
+          {CAL_SITES.map(s => <option key={s.code} value={s.code}>{s.code} — {s.name}</option>)}
+        </select>
+      </div>
+
+      {/* VIEW */}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {calView === "month" && <CalMonthView viewDate={viewDate} events={filtered} onDayClick={d => setModal({ mode: "new", date: d })} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
+        {calView === "week"  && <CalWeekView  viewDate={viewDate} events={filtered} onDayClick={d => setModal({ mode: "new", date: d })} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
+        {calView === "agenda" && <CalAgendaView events={filtered} onEventClick={ev => setModal({ mode: "edit", event: ev })} />}
+      </div>
+
+      {/* LEGEND */}
+      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: S.lg, flexWrap: "wrap",
+        paddingTop: S.md, borderTop: "1px solid " + T.borderFaint }}>
+        {CAL_CATEGORIES.map(c => (
+          <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 2, background: calCatColor(c) }} />
+            <span style={{ ...TS.micro, color: T.textDim }}>{c.label}</span>
+          </div>
+        ))}
+        <div style={{ marginLeft: "auto", ...TS.micro, fontFamily: FF.mono, color: T.textFaint }}>
+          {events.length} events · {upcomingCount} upcoming
+        </div>
+      </div>
+
+      {modal && <CalModal state={modal} onSave={handleSave} onDelete={handleDelete} onClose={() => setModal(null)} />}
+    </div>
+  );
+};
+
+const CalEventPill = ({ event, onClick }) => {
+  const cat = calGetCategory(event.category);
+  const c = calCatColor(cat);
+  return (
+    <div onClick={onClick} title={`${event.title}${event.startTime ? " · " + event.startTime : ""}`} style={{
+      background: c + "1f", borderLeft: "2px solid " + c,
+      padding: "2px 5px", fontSize: 10, color: T.text,
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      borderRadius: 2, fontFamily: FF.mono, cursor: "pointer", marginBottom: 2,
+    }}>
+      {event.startTime && <span style={{ color: c, marginRight: 4 }}>{event.startTime}</span>}
+      <span>{event.title}</span>
+      {event.site && event.site !== "—" && <span style={{ color: T.textFaint, marginLeft: 4 }}>· {event.site}</span>}
+    </div>
+  );
+};
+
+const CalMonthView = ({ viewDate, events, onDayClick, onEventClick }) => {
+  const first = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
+  const start = calStartOfWeek(first);
+  const cells = Array.from({ length: 42 }, (_, i) => calAddDays(start, i));
+  const today = calStartOfDay(new Date());
+  const currentMonth = viewDate.getMonth();
+  const eventsByDay = {};
+  events.forEach(e => { (eventsByDay[e.date] ||= []).push(e); });
+  Object.keys(eventsByDay).forEach(k => eventsByDay[k].sort((a, b) => (a.startTime || "").localeCompare(b.startTime || "")));
+
+  return (
+    <div style={{ border: "1px solid " + T.border, borderRadius: 4, display: "flex", flexDirection: "column", height: "100%", minHeight: 480, background: T.bgRaised }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", borderBottom: "1px solid " + T.border, background: T.bgSunken }}>
+        {CAL_DAYS.map(d => (
+          <div key={d} style={{ padding: "8px 10px", ...TS.micro, color: T.textDim, textTransform: "uppercase", letterSpacing: 1.5, fontWeight: 600, fontFamily: FF.mono }}>{d}</div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gridTemplateRows: "repeat(6,1fr)", flex: 1 }}>
+        {cells.map((d, i) => {
+          const inMonth = d.getMonth() === currentMonth;
+          const isToday = calSameDay(d, today);
+          const dayEvents = eventsByDay[calYmd(d)] || [];
+          return (
+            <div key={i} onClick={() => onDayClick(d)} style={{
+              borderRight: (i % 7 < 6) ? "1px solid " + T.borderFaint : "none",
+              borderBottom: (i < 35) ? "1px solid " + T.borderFaint : "none",
+              padding: 6, cursor: "pointer", overflow: "hidden",
+              background: inMonth ? T.bgRaised : T.bgSunken,
+              opacity: inMonth ? 1 : 0.5,
+              display: "flex", flexDirection: "column", gap: 3, minHeight: 0,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{
+                  fontFamily: FF.mono, fontSize: 11, fontWeight: isToday ? 700 : 500,
+                  color: isToday ? "#fff" : T.text,
+                  background: isToday ? T.accent : "transparent",
+                  padding: isToday ? "1px 6px" : "1px 0", borderRadius: 2,
+                }}>{d.getDate()}</span>
+                {dayEvents.length > 3 && (
+                  <span style={{ fontFamily: FF.mono, fontSize: 9, color: T.textFaint }}>+{dayEvents.length - 3}</span>
+                )}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 0, overflow: "hidden" }}>
+                {dayEvents.slice(0, 3).map(ev => (
+                  <CalEventPill key={ev.id} event={ev} onClick={(e) => { e.stopPropagation(); onEventClick(ev); }} />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const CalWeekView = ({ viewDate, events, onDayClick, onEventClick }) => {
+  const ws = calStartOfWeek(viewDate);
+  const days = Array.from({ length: 7 }, (_, i) => calAddDays(ws, i));
+  const today = calStartOfDay(new Date());
+  const hours = Array.from({ length: 14 }, (_, i) => i + 6);
+  const eventsByDay = {};
+  events.forEach(e => { (eventsByDay[e.date] ||= []).push(e); });
+
+  return (
+    <div style={{ border: "1px solid " + T.border, borderRadius: 4, background: T.bgRaised }}>
+      <div style={{ display: "grid", gridTemplateColumns: "60px repeat(7,1fr)", background: T.bgSunken, borderBottom: "1px solid " + T.border }}>
+        <div></div>
+        {days.map((d, i) => {
+          const isToday = calSameDay(d, today);
+          return (
+            <div key={i} onClick={() => onDayClick(d)} style={{ padding: "8px 10px", cursor: "pointer", borderLeft: "1px solid " + T.borderFaint }}>
+              <div style={{ ...TS.micro, color: T.textDim, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: FF.mono }}>{CAL_DAYS[d.getDay()]}</div>
+              <div style={{ fontFamily: FF.mono, fontSize: 18, fontWeight: 600, color: isToday ? T.accent : T.text, marginTop: 2 }}>{d.getDate()}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "60px repeat(7,1fr)" }}>
+        {hours.map((h) => (
+          <React.Fragment key={h}>
+            <div style={{ padding: "6px 6px", fontFamily: FF.mono, fontSize: 10, color: T.textFaint, textAlign: "right",
+              borderTop: "1px solid " + T.borderFaint, height: 56 }}>
+              {String(h).padStart(2, "0")}:00
+            </div>
+            {days.map((d, di) => {
+              const dayEvents = (eventsByDay[calYmd(d)] || []).filter(e => {
+                if (!e.startTime) return h === 6;
+                const eh = parseInt(e.startTime.slice(0, 2), 10);
+                return eh === h;
+              });
+              return (
+                <div key={di} onClick={() => onDayClick(d)} style={{
+                  height: 56, borderLeft: "1px solid " + T.borderFaint,
+                  borderTop: "1px solid " + T.borderFaint,
+                  padding: 3, cursor: "pointer", overflow: "hidden",
+                }}>
+                  {dayEvents.map(ev => (
+                    <CalEventPill key={ev.id} event={ev} onClick={(e) => { e.stopPropagation(); onEventClick(ev); }} />
+                  ))}
+                </div>
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const CalAgendaView = ({ events, onEventClick }) => {
+  const today = calStartOfDay(new Date()).getTime();
+  const sorted = [...events]
+    .filter(e => new Date(e.date + "T00:00:00").getTime() >= today)
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return (a.startTime || "").localeCompare(b.startTime || "");
+    });
+
+  if (sorted.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: 60, color: T.textFaint, fontFamily: FF.mono, fontSize: 12, border: "1px dashed " + T.border, borderRadius: 4 }}>
+        No upcoming events. Click "New Event" to add one.
+      </div>
+    );
+  }
+
+  const grouped = sorted.reduce((acc, e) => { (acc[e.date] ||= []).push(e); return acc; }, {});
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {Object.entries(grouped).map(([date, evs]) => {
+        const dObj = new Date(date + "T00:00:00");
+        return (
+          <div key={date} style={{ border: "1px solid " + T.border, background: T.bgRaised, borderRadius: 4 }}>
+            <div style={{ padding: "8px 14px", borderBottom: "1px solid " + T.borderFaint,
+              fontFamily: FF.mono, fontSize: 11, color: T.brass, textTransform: "uppercase", letterSpacing: 1.5, fontWeight: 600 }}>
+              {CAL_DAYS[dObj.getDay()]}, {CAL_MONTHS[dObj.getMonth()]} {dObj.getDate()}, {dObj.getFullYear()}
+            </div>
+            {evs.map((ev, i) => {
+              const cat = calGetCategory(ev.category);
+              const c = calCatColor(cat);
+              return (
+                <div key={ev.id} onClick={() => onEventClick(ev)} style={{
+                  display: "flex", padding: "10px 14px", gap: 12, cursor: "pointer",
+                  borderBottom: i < evs.length - 1 ? "1px solid " + T.borderFaint : "none",
+                  alignItems: "center",
+                }}>
+                  <div style={{ fontFamily: FF.mono, fontSize: 11, color: T.textDim, width: 95, flexShrink: 0 }}>
+                    {ev.startTime ? `${ev.startTime}${ev.endTime ? "–" + ev.endTime : ""}` : "All day"}
+                  </div>
+                  <div style={{ width: 3, alignSelf: "stretch", background: c, borderRadius: 2 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ ...TS.body, fontWeight: 500, color: T.text }}>{ev.title}</div>
+                    {(ev.location || ev.notes) && (
+                      <div style={{ ...TS.micro, color: T.textDim, marginTop: 3 }}>
+                        {ev.location && <span>📍 {ev.location}</span>}
+                        {ev.location && ev.notes && <span style={{ margin: "0 6px" }}>·</span>}
+                        {ev.notes && <span>{ev.notes.length > 80 ? ev.notes.slice(0, 80) + "…" : ev.notes}</span>}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <span style={{ padding: "2px 7px", background: c + "22", color: c, borderRadius: 2,
+                      textTransform: "uppercase", letterSpacing: 0.6, fontFamily: FF.mono, fontSize: 9, fontWeight: 600 }}>{cat.label}</span>
+                    {ev.site && ev.site !== "—" && (
+                      <span style={{ padding: "2px 7px", background: T.surface, color: T.textDim, borderRadius: 2,
+                        fontFamily: FF.mono, fontSize: 9, fontWeight: 600 }}>{ev.site}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const CalModal = ({ state, onSave, onDelete, onClose }) => {
+  const isEdit = state.mode === "edit";
+  const initial = isEdit ? state.event : {
+    title: "",
+    date: calYmd(state.date || new Date()),
+    startTime: "09:00",
+    endTime: "10:00",
+    category: "meeting",
+    site: "—",
+    location: "",
+    notes: "",
+  };
+  const [form, setForm] = useState(initial);
+  const titleRef = useRef(null);
+  useEffect(() => { setTimeout(() => titleRef.current?.focus(), 50); }, []);
+  // Close via Escape — match Settings/Palette behavior so all modals dismiss the same way
+  useEffect(() => {
+    const onEsc = () => onClose();
+    window.addEventListener("execos:escape", onEsc);
+    return () => window.removeEventListener("execos:escape", onEsc);
+  }, [onClose]);
+  const upd = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+  const handleSubmit = () => {
+    if (!form.title.trim()) { titleRef.current?.focus(); return; }
+    onSave(form);
+  };
+
+  const fieldInput = {
+    width: "100%", background: T.bgSunken, border: "1px solid " + T.border, color: T.text,
+    fontFamily: FF.mono, fontSize: 12, padding: "7px 10px", borderRadius: 3,
+  };
+  const labelStyle = {
+    fontFamily: FF.mono, fontSize: 10, color: T.textFaint,
+    textTransform: "uppercase", letterSpacing: 1, fontWeight: 600, marginBottom: 4,
+  };
+
+  return (
+    <div data-modal-backdrop onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      animation: "fadeIn 0.15s ease",
+    }}>
+      <div data-modal onClick={e => e.stopPropagation()} style={{
+        background: T.bgRaised, border: "1px solid " + T.borderBright, borderRadius: 4,
+        width: 500, maxWidth: "92vw", maxHeight: "90vh", overflow: "auto",
+        padding: 22, display: "flex", flexDirection: "column", gap: 14,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ ...TS.label, color: T.brass, textTransform: "uppercase", letterSpacing: 1.5, fontWeight: 700 }}>
+            {isEdit ? "Edit Event" : "New Event"}
+          </div>
+          <button onClick={onClose} style={{
+            background: "transparent", border: "1px solid " + T.border, color: T.textDim,
+            width: 26, height: 26, padding: 0, borderRadius: 3, cursor: "pointer",
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+
+        <div>
+          <div style={labelStyle}>Title</div>
+          <input ref={titleRef} value={form.title} onChange={e => upd("title", e.target.value)}
+            placeholder="e.g., MWHC AHU-6 valve walk-down" style={fieldInput} />
+        </div>
+
+        <div data-grid="3col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          <div>
+            <div style={labelStyle}>Date</div>
+            <input type="date" value={form.date} onChange={e => upd("date", e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={labelStyle}>Start</div>
+            <input type="time" value={form.startTime} onChange={e => upd("startTime", e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={labelStyle}>End</div>
+            <input type="time" value={form.endTime} onChange={e => upd("endTime", e.target.value)} style={fieldInput} />
+          </div>
+        </div>
+
+        <div data-grid="2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <div style={labelStyle}>Category</div>
+            <select value={form.category} onChange={e => upd("category", e.target.value)} style={fieldInput}>
+              {CAL_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={labelStyle}>Site</div>
+            <select value={form.site} onChange={e => upd("site", e.target.value)} style={fieldInput}>
+              {CAL_SITES.map(s => <option key={s.code} value={s.code}>{s.code} — {s.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <div style={labelStyle}>Location (optional)</div>
+          <input value={form.location} onChange={e => upd("location", e.target.value)}
+            placeholder="e.g., Mechanical Room 4H2A" style={fieldInput} />
+        </div>
+
+        <div>
+          <div style={labelStyle}>Notes</div>
+          <textarea value={form.notes} onChange={e => upd("notes", e.target.value)} rows={4}
+            placeholder="Details, attendees, action items…"
+            style={{ ...fieldInput, minHeight: 80, resize: "vertical", fontFamily: FF.body }} />
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
+          {isEdit ? (
+            <Btn icon="trash" variant="danger" onClick={() => onDelete(form.id)}>Delete</Btn>
+          ) : <div />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={onClose}>Cancel</Btn>
+            <Btn icon="check" variant="primary" onClick={handleSubmit}>{isEdit ? "Save" : "Create"}</Btn>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -7333,6 +8233,27 @@ const App = () => {
   const [apiKey, setApiKey] = useState(() => LS.get("api_key", ""));
   const [model, setModel] = useState(() => LS.get("model", "claude-sonnet-4-6"));
   const [, themeTick] = useState(0);
+  const { isMobile } = useViewport();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Auto-close sidebar when user picks a view (mobile only)
+  const handleViewChange = (v) => {
+    setView(v);
+    if (isMobile) {
+      setSidebarOpen(false);
+      document.body.classList.remove("sidebar-open");
+    }
+  };
+
+  // Sync sidebar-open body class for CSS
+  useEffect(() => {
+    if (!isMobile) {
+      document.body.classList.remove("sidebar-open");
+      return;
+    }
+    if (sidebarOpen) document.body.classList.add("sidebar-open");
+    else document.body.classList.remove("sidebar-open");
+  }, [sidebarOpen, isMobile]);
 
   useEffect(() => {
     // Open settings on first visit if no key (and unlocked)
@@ -7351,6 +8272,7 @@ const App = () => {
       if (e.key === "Escape") {
         setPalette(false);
         setSettings(false);
+        setSidebarOpen(false);
         // Also dispatch a window event so any open detail panels (Recordings detail,
         // Dashboard task detail, etc.) can listen and close themselves.
         window.dispatchEvent(new Event("execos:escape"));
@@ -7366,14 +8288,16 @@ const App = () => {
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <TopBar onOpenPalette={() => setPalette(true)} onOpenSettings={() => setSettings(true)} hasKey={!!apiKey} />
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <Sidebar active={view} onChange={setView} />
-        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-          {view === "dashboard" && <Dashboard onJump={setView} apiKey={apiKey} model={model} />}
+      <TopBar onOpenPalette={() => setPalette(true)} onOpenSettings={() => setSettings(true)} hasKey={!!apiKey} onToggleSidebar={() => setSidebarOpen(o => !o)} />
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
+        <div id="execos-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+        <Sidebar active={view} onChange={handleViewChange} />
+        <div id="execos-main" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+          {view === "dashboard" && <Dashboard onJump={handleViewChange} apiKey={apiKey} model={model} />}
           {view === "terminal" && <TerminalView apiKey={apiKey} model={model} />}
           {view === "sites" && <SitesView apiKey={apiKey} model={model} />}
           {view === "recordings" && <RecordingsView apiKey={apiKey} model={model} />}
+          {view === "calendar" && <CalendarView />}
           {view === "focus" && <FocusOS apiKey={apiKey} model={model} />}
           {view === "email" && <EmailView apiKey={apiKey} model={model} />}
           {view === "contracts" && <ContractsView apiKey={apiKey} model={model} />}
