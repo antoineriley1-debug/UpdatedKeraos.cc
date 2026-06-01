@@ -1,5 +1,14 @@
 {
-  "redirects": [
-    { "source": "/:path*", "destination": "https://priority-task-six.vercel.app/exec.html", "permanent": false }
+  "rewrites": [
+    { "source": "/", "destination": "/exec.html" }
+  ],
+  "headers": [
+    {
+      "source": "/exec.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" }
+      ]
+    }
   ]
 }
