@@ -482,19 +482,23 @@
                 `;
                 
                 // Save extraction
+                const payload = {
+                    workspace: workspaceKey,
+                    email_id: currentEmail.id,
+                    extraction: {
+                        prompt: prompt,
+                        summary: `Email from ${currentEmail.from_addr}: "${currentEmail.subject}"`,
+                        analyzed_at: new Date().toISOString(),
+                        user_analysis: prompt,
+                        timestamp: Date.now()
+                    }
+                };
+                console.log('Sending payload:', payload);
+                
                 const res = await fetch(`https://updated-keraos-cc.vercel.app/api/email/update`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        workspace: workspaceKey,
-                        email_id: currentEmail.id,
-                        extraction: {
-                            prompt,
-                            summary: `Email from ${currentEmail.from_addr}: "${currentEmail.subject}"`,
-                            analyzed_at: new Date().toISOString(),
-                            user_analysis: prompt
-                        }
-                    })
+                    body: JSON.stringify(payload)
                 });
                 
                 if (!res.ok) throw new Error(`Save failed: ${res.status}`);
