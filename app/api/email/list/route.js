@@ -16,7 +16,7 @@ export async function OPTIONS() {
 export async function GET(req) {
   try {
     const SUPABASE_URL = process.env.SUPABASE_URL;
-    const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
+    const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
     if (!SUPABASE_URL || !SERVICE_KEY) {
       return NextResponse.json({ error: "server misconfigured" }, { status: 500, headers: CORS });
     }
@@ -31,12 +31,10 @@ export async function GET(req) {
     const reviewOnly = u.searchParams.get("status") === "review";
 
     let q = SUPABASE_URL + "/rest/v1/ingested_emails"
-      + "?workspace_key=eq." + encodeURIComponent(workspace)
+      + "?workspace_id=eq." + encodeURIComponent(workspace)
       + "&select=*,attachments:ingested_attachments(id,filename,mime_type,size_bytes),extraction:email_extractions(*)"
       + "&order=received_at.desc"
       + "&limit=" + limit;
-    if (!includeArchived) q += "&archived=eq.false";
-    if (reviewOnly)       q += "&in_review_queue=eq.true";
 
     const res = await fetch(q, {
       headers: {
