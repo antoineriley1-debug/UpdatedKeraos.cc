@@ -362,7 +362,7 @@
     </div>
 
     <script>
-        const API_BASE = '/api/email';
+        const API_BASE = 'https://updated-keraos-cc.vercel.app/api/email';
         let currentEmail = null;
         let workspaceKey = 'twiney-execos-mGJ7Yk9Lp2RnDqW8sZ4eXbHvC3FaTu6N';
         let emails = [];
@@ -482,7 +482,7 @@
                 `;
                 
                 // Save extraction
-                const res = await fetch(`${API_BASE}/update`, {
+                const res = await fetch(`https://updated-keraos-cc.vercel.app/api/email/update`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
