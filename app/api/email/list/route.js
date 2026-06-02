@@ -22,10 +22,13 @@ export async function GET(req) {
     }
 
     const u = new URL(req.url);
-    const workspace = u.searchParams.get("workspace");
+    let workspace = u.searchParams.get("workspace");
     if (!workspace) {
       return NextResponse.json({ error: "workspace required" }, { status: 400, headers: CORS });
     }
+    
+    // Normalize workspace key: twiney-exeCos-... → twiney-execos-... (lowercase)
+    workspace = workspace.replace(/exeCos/i, "execos");
     
     const limit = Math.min(parseInt(u.searchParams.get("limit") || "50", 10) || 50, 200);
 

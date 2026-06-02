@@ -23,11 +23,14 @@ export async function POST(req) {
     }
 
     const body = await req.json();
-    const { workspace, email_id, extraction } = body || {};
+    let { workspace, email_id, extraction } = body || {};
     
     if (!workspace || !email_id) {
       return NextResponse.json({ error: "workspace and email_id required" }, { status: 400, headers: CORS });
     }
+    
+    // Normalize workspace key: twiney-exeCos-... → twiney-execos-... (lowercase)
+    workspace = workspace.replace(/exeCos/i, "execos");
 
     if (!extraction || typeof extraction !== "object") {
       return NextResponse.json({ error: "extraction object required" }, { status: 400, headers: CORS });
