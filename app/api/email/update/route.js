@@ -16,6 +16,12 @@ export async function OPTIONS() {
 
 export async function POST(req) {
   try {
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
+    if (!SUPABASE_URL || !SERVICE_KEY) {
+      return NextResponse.json({ error: "server misconfigured" }, { status: 500, headers: CORS });
+    }
+
     const body = await req.json();
     const { workspace, email_id, extraction } = body || {};
     
@@ -23,23 +29,42 @@ export async function POST(req) {
       return NextResponse.json({ error: "workspace and email_id required" }, { status: 400, headers: CORS });
     }
 
-    // TEMPORARY: Return success for Investigate Thoroughly (Supabase auth pending)
-    // TODO: Replace with real Claude AI analysis + Supabase extraction save once auth is fixed
+    if (!extraction || typeof extraction !== "object") {
+      return NextResponse.json({ error: "extraction object required" }, { status: 400, headers: CORS });
+    }
+
+    // Save extraction to Supabase
+    const headers = {
+      "Content-Type": "application/json",
+      "apikey": SERVICE_KEY,
+      "Authorization": "Bearer " + SERVICE_KEY,
+      "Prefer": "return=representation",
+    };
+
+    const safeExtraction = {
+      email_id,
+      workspace_key: workspace,
+      extracted_data: extraction,
+      extracted_at: new Date().toISOString(),
+    };
+
+    const url = SUPABASE_URL + "/rest/v1/email_extractions";
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(safeExtraction),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text();
+      return NextResponse.json({ error: "Save failed " + res.status, detail: txt.slice(0, 300) }, { status: res.status, headers: CORS });
+    }
+
+    const rows = await res.json();
     return NextResponse.json({
       ok: true,
-      extraction: {
-        email_id,
-        workspace,
-        status: "analyzed",
-        analysis: {
-          summary: "Email analysis initialized. Ready to accept investigation requests.",
-          urgency: "normal",
-          category: "pending",
-          action_items: [],
-          extracted_at: new Date().toISOString()
-        }
-      },
-      message: "Investigate Thoroughly ready"
+      extraction: rows[0] || safeExtraction,
+      message: "Investigation saved successfully"
     }, { status: 200, headers: CORS });
 
   } catch (err) {
