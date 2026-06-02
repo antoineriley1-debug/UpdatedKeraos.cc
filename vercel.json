@@ -1,13 +1,35 @@
 {
-  "rewrites": [
-    { "source": "/", "destination": "/exec.html" }
+  "version": 2,
+  "buildCommand": "npm install && npm run build",
+  "env": {
+    "SUPABASE_URL": "@supabase_url",
+    "SUPABASE_SERVICE_KEY": "@supabase_service_key",
+    "SUPABASE_ANON_KEY": "@supabase_anon_key",
+    "INGEST_WORKSPACE_KEY": "@ingest_workspace_key",
+    "INGEST_SECRET": "@ingest_secret"
+  },
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next@latest"
+    }
   ],
   "headers": [
     {
-      "source": "/exec.html",
+      "source": "/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
-        { "key": "X-Frame-Options", "value": "SAMEORIGIN" }
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-Ingest-Secret"
+        }
       ]
     }
   ]
