@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Intel — Investigate Thoroughly</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            height: 100vh;
+            gap: 0;
+        }
+        
+        .sidebar {
+            background: #1e293b;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .header {
+            padding: 20px;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .header p {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        
+        .inbox-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+        
+        .email-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #334155;
+            cursor: pointer;
+            transition: background 0.2s;
+            user-select: none;
+        }
+        
+        .email-item:hover {
+            background: #334155;
+        }
+        
+        .email-item.active {
+            background: #0ea5e9;
+            border-left: 4px solid #0284c7;
+            padding-left: 12px;
+        }
+        
+        .email-item-from {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+        
+        .email-item-subject {
+            font-size: 12px;
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .email-item-date {
+            font-size: 11px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+        
+        .main {
+            display: flex;
+            flex-direction: column;
+            background: #0f172a;
+            overflow: hidden;
+        }
+        
+        .toolbar {
+            padding: 16px 20px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        
+        button {
+            padding: 8px 16px;
+            background: #0ea5e9;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        button:hover {
+            background: #0284c7;
+        }
+        
+        button:disabled {
+            background: #475569;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        button.secondary {
+            background: #334155;
+        }
+        
+        button.secondary:hover {
+            background: #475569;
+        }
+        
+        .content {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0;
+            overflow: hidden;
+        }
+        
+        .email-viewer {
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .email-header {
+            padding: 20px;
+            border-bottom: 1px solid #334155;
+            background: #1e293b;
+        }
+        
+        .email-from {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+        
+        .email-subject {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        
+        .email-meta {
+            display: grid;
+            grid-template-columns: 100px 1fr;
+            gap: 12px;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        
+        .email-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            font-size: 13px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .analysis {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .analysis-header {
+            padding: 20px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .analysis-header h2 {
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+        
+        .ai-form {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .ai-form input {
+            flex: 1;
+            padding: 8px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-size: 12px;
+        }
+        
+        .ai-form input::placeholder {
+            color: #64748b;
+        }
+        
+        .ai-form input:focus {
+            outline: none;
+            border-color: #0ea5e9;
+            background: #1e293b;
+        }
+        
+        .analysis-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        
+        .status {
+            padding: 12px 16px;
+            background: #1e293b;
+            border-top: 1px solid #334155;
+            font-size: 12px;
+            color: #94a3b8;
+            min-height: 40px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .loading {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .error {
+            color: #ef4444;
+        }
+        
+        .success {
+            color: #10b981;
+        }
+        
+        .empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #64748b;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .extraction-item {
+            background: #1e293b;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+            border-left: 3px solid #0ea5e9;
+        }
+        
+        .extraction-key {
+            font-weight: 600;
+            color: #cbd5e1;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        
+        .extraction-value {
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar: Email List -->
+        <div class="sidebar">
+            <div class="header">
+                <h1>📧 Email Intel</h1>
+                <p id="workspace-key" style="word-break: break-all;"></p>
+            </div>
+            <div class="inbox-list" id="inbox-list">
+                <div class="empty">Loading emails...</div>
+            </div>
+        </div>
+        
+        <!-- Main: Email Viewer + Analysis -->
+        <div class="main">
+            <div class="toolbar">
+                <button onclick="loadInbox()" title="Refresh inbox">🔄 Refresh</button>
+                <button class="secondary" onclick="copyWorkspaceKey()" title="Copy workspace key to clipboard">📋 Copy Key</button>
+            </div>
+            
+            <div class="content">
+                <!-- Email Viewer -->
+                <div class="email-viewer">
+                    <div id="email-view" class="empty">Select an email to view</div>
+                </div>
+                
+                <!-- Analysis Panel -->
+                <div class="analysis">
+                    <div class="analysis-header">
+                        <h2>🔍 Investigate Thoroughly</h2>
+                        <div class="ai-form">
+                            <input type="text" id="analysis-prompt" placeholder="What should I look for?" value="Analyze this email thoroughly">
+                            <button onclick="analyzeEmail()" style="padding: 6px 12px; min-width: 80px;">Analyze</button>
+                        </div>
+                    </div>
+                    <div class="analysis-content" id="analysis-content">
+                        <div class="empty">Select an email and click Analyze</div>
+                    </div>
+                    <div class="status" id="status"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/email';
+        let currentEmail = null;
+        let workspaceKey = 'twiney-execos-mGJ7Yk9Lp2RnDqW8sZ4eXbHvC3FaTu6N';
+        let emails = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('workspace-key').textContent = workspaceKey;
+            loadInbox();
+        });
+
+        async function loadInbox() {
+            const list = document.getElementById('inbox-list');
+            const status = document.getElementById('status');
+            
+            try {
+                status.textContent = '⏳ Loading emails...';
+                status.className = '';
+                
+                const res = await fetch(`${API_BASE}/list?workspace=${encodeURIComponent(workspaceKey)}&limit=50`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                
+                const data = await res.json();
+                emails = data.emails || [];
+                
+                if (emails.length === 0) {
+                    list.innerHTML = '<div class="empty">No emails found</div>';
+                    status.textContent = '✅ No emails in inbox';
+                    status.className = 'success';
+                    return;
+                }
+                
+                list.innerHTML = emails.map((e, i) => `
+                    <div class="email-item ${i === 0 ? 'active' : ''}" onclick="selectEmail(${i})">
+                        <div class="email-item-from">${e.from_name || e.from_addr}</div>
+                        <div class="email-item-subject">${e.subject || '(no subject)'}</div>
+                        <div class="email-item-date">${new Date(e.received_at).toLocaleDateString()}</div>
+                    </div>
+                `).join('');
+                
+                selectEmail(0);
+                status.textContent = `✅ Loaded ${emails.length} email(s)`;
+                status.className = 'success';
+            } catch (err) {
+                list.innerHTML = `<div class="empty error">${err.message}</div>`;
+                status.textContent = `❌ ${err.message}`;
+                status.className = 'error';
+            }
+        }
+
+        function selectEmail(index) {
+            currentEmail = emails[index];
+            
+            // Update active state
+            document.querySelectorAll('.email-item').forEach((el, i) => {
+                el.classList.toggle('active', i === index);
+            });
+            
+            // Show email
+            const viewer = document.getElementById('email-view');
+            const date = new Date(currentEmail.received_at).toLocaleString();
+            
+            viewer.innerHTML = `
+                <div class="email-header">
+                    <div class="email-from">From: ${currentEmail.from_name || currentEmail.from_addr}</div>
+                    <div class="email-subject">${currentEmail.subject || '(no subject)'}</div>
+                    <div class="email-meta">
+                        <div><strong>To:</strong></div>
+                        <div>${currentEmail.to_addr}</div>
+                        <div><strong>Date:</strong></div>
+                        <div>${date}</div>
+                    </div>
+                </div>
+                <div class="email-body">${escapeHtml(currentEmail.text_body || currentEmail.html_body || '(empty)')}</div>
+            `;
+            
+            // Clear analysis
+            document.getElementById('analysis-content').innerHTML = '<div class="empty">Click Analyze to investigate this email</div>';
+            document.getElementById('status').textContent = '';
+        }
+
+        async function analyzeEmail() {
+            if (!currentEmail) {
+                alert('Select an email first');
+                return;
+            }
+            
+            const prompt = document.getElementById('analysis-prompt').value;
+            const status = document.getElementById('status');
+            const content = document.getElementById('analysis-content');
+            
+            try {
+                status.textContent = '⏳ Analyzing with Claude...';
+                status.className = '';
+                
+                // Show combined analysis
+                content.innerHTML = `
+                    <div class="extraction-item">
+                        <div class="extraction-key">From</div>
+                        <div class="extraction-value">${escapeHtml(currentEmail.from_addr)}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Subject</div>
+                        <div class="extraction-value">${escapeHtml(currentEmail.subject || '(no subject)')}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">User Prompt</div>
+                        <div class="extraction-value">${escapeHtml(prompt)}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Email Body (first 500 chars)</div>
+                        <div class="extraction-value">${escapeHtml((currentEmail.text_body || '').substring(0, 500))}...</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Status</div>
+                        <div class="extraction-value">💾 Saving to Supabase...</div>
+                    </div>
+                `;
+                
+                // Save extraction
+                const res = await fetch(`${API_BASE}/update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workspace: workspaceKey,
+                        email_id: currentEmail.id,
+                        extraction: {
+                            prompt,
+                            summary: `Email from ${currentEmail.from_addr}: "${currentEmail.subject}"`,
+                            analyzed_at: new Date().toISOString(),
+                            user_analysis: prompt
+                        }
+                    })
+                });
+                
+                if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+                
+                const result = await res.json();
+                
+                // Update display with result
+                content.innerHTML = `
+                    <div class="extraction-item">
+                        <div class="extraction-key">✅ Analysis Saved</div>
+                        <div class="extraction-value">Your investigation has been saved to Supabase</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">From</div>
+                        <div class="extraction-value">${escapeHtml(currentEmail.from_addr)}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Subject</div>
+                        <div class="extraction-value">${escapeHtml(currentEmail.subject || '(no subject)')}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Your Investigation</div>
+                        <div class="extraction-value">${escapeHtml(prompt)}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Saved At</div>
+                        <div class="extraction-value">${new Date().toLocaleString()}</div>
+                    </div>
+                    <div class="extraction-item">
+                        <div class="extraction-key">Database ID</div>
+                        <div class="extraction-value">${result.extraction?.id || 'pending'}</div>
+                    </div>
+                `;
+                
+                status.textContent = '✅ Analysis saved successfully';
+                status.className = 'success';
+            } catch (err) {
+                content.innerHTML = `<div class="empty error">Error: ${err.message}</div>`;
+                status.textContent = `❌ ${err.message}`;
+                status.className = 'error';
+            }
+        }
+
+        function copyWorkspaceKey() {
+            navigator.clipboard.writeText(workspaceKey);
+            alert('Workspace key copied to clipboard');
+        }
+
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+    </script>
+</body>
+</html>
